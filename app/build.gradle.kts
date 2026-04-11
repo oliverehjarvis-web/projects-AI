@@ -7,11 +7,11 @@ plugins {
 }
 
 android {
-    namespace = "com.oli.cortex"
+    namespace = "com.oli.projectsai"
     compileSdk = 35
 
     defaultConfig {
-        applicationId = "com.oli.cortex"
+        applicationId = "com.oli.projectsai"
         minSdk = 33
         targetSdk = 35
         versionCode = 1

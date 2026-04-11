@@ -1,4 +1,4 @@
-# Cortex - On-Device AI Assistant with Project Context
+# Projects AI - On-Device AI Assistant with Project Context
 
 A native Android app that wraps the Gemma 4 E4B model running locally on device, providing persistent project-scoped memory and context for high-quality content generation.
 
@@ -33,7 +33,7 @@ The app uses Google's Gemma 4 E4B model via MediaPipe LLM Inference API.
 4. Tap **Import .task File** and select your downloaded model
 5. Select your preferred precision and tap **Load**
 
-The model file is stored in the app's private external storage (`Android/data/com.oli.cortex/files/models/`).
+The model file is stored in the app's private external storage (`Android/data/com.oli.projectsai/files/models/`).
 
 ## Architecture
 

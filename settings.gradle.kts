@@ -14,5 +14,5 @@ dependencyResolution {
     }
 }
 
-rootProject.name = "CortexAI"
+rootProject.name = "ProjectsAI"
 include(":app")

@@ -2,7 +2,7 @@
 
 ## Overview
 
-Cortex uses MVVM with a clean separation between the inference layer and the rest of the app. The key design decision is the `InferenceBackend` interface, which allows swapping between local and remote model execution without touching UI or data code.
+Projects AI uses MVVM with a clean separation between the inference layer and the rest of the app. The key design decision is the `InferenceBackend` interface, which allows swapping between local and remote model execution without touching UI or data code.
 
 ## Inference Abstraction
 
@@ -60,7 +60,7 @@ No changes needed to UI, ViewModels, or data layer - the `InferenceManager` hand
 ## Data Layer
 
 ```
-Room Database (cortex.db)
+Room Database (projects_ai.db)
 ├── projects     - Workspaces with context and memory
 ├── chats        - Conversations belonging to projects
 ├── messages     - Individual messages in chats
@@ -85,7 +85,7 @@ Currently uses a character-based approximation (~3.5 chars per token). When Medi
 ## Module Structure
 
 ```
-com.oli.cortex/
+com.oli.projectsai/
 ├── data/
 │   ├── db/          - Room entities, DAOs, type converters
 │   └── repository/  - Repository pattern over DAOs
