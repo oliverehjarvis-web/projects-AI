@@ -5,9 +5,8 @@ import android.util.Log
 import com.google.mediapipe.tasks.genai.llminference.LlmInference
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.callbackFlow
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.withContext
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -31,25 +30,24 @@ class LocalMediaPipeBackend @Inject constructor(
     override val isLoaded: Boolean get() = inference != null
     override val loadedModel: ModelInfo? get() = _loadedModel
 
-    override suspend fun loadModel(modelInfo: ModelInfo) = withContext(Dispatchers.IO) {
-        unloadModel()
-        try {
-            val options = LlmInference.LlmInferenceOptions.builder()
-                .setModelPath(modelInfo.filePath)
-                .setMaxTokens(modelInfo.contextLength)
-                .setResultListener { partialResult, done ->
-                    // handled per-request via generateResponse
-                }
-                .build()
+    override suspend fun loadModel(modelInfo: ModelInfo) {
+        withContext(Dispatchers.IO) {
+            unloadModel()
+            try {
+                val options = LlmInference.LlmInferenceOptions.builder()
+                    .setModelPath(modelInfo.filePath)
+                    .setMaxTokens(modelInfo.contextLength)
+                    .build()
 
-            inference = LlmInference.createFromOptions(context, options)
-            _loadedModel = modelInfo
-            Log.i(TAG, "Model loaded: ${modelInfo.name} (${modelInfo.precision.displayName})")
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to load model", e)
-            inference = null
-            _loadedModel = null
-            throw e
+                inference = LlmInference.createFromOptions(context, options)
+                _loadedModel = modelInfo
+                Log.i(TAG, "Model loaded: ${modelInfo.name} (${modelInfo.precision.displayName})")
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to load model", e)
+                inference = null
+                _loadedModel = null
+                throw e
+            }
         }
     }
 
@@ -63,34 +61,17 @@ class LocalMediaPipeBackend @Inject constructor(
         systemPrompt: String,
         messages: List<ChatMessage>,
         config: GenerationConfig
-    ): Flow<String> = callbackFlow {
+    ): Flow<String> = flow {
         val llm = inference ?: throw IllegalStateException("Model not loaded")
-
         val prompt = buildPrompt(systemPrompt, messages)
 
-        withContext(Dispatchers.IO) {
-            try {
-                // Use streaming generation
-                llm.generateResponseAsync(prompt).let { /* fire */ }
-            } catch (e: Exception) {
-                close(e)
-            }
+        // v1 uses the synchronous API and emits the full response as a single chunk.
+        // TODO: switch to generateResponseAsync with a ProgressListener for true
+        //       token streaming once we have an end-to-end happy path with the model.
+        val result = withContext(Dispatchers.IO) {
+            llm.generateResponse(prompt)
         }
-
-        // For MediaPipe LLM Inference, we use the synchronous API
-        // wrapped in a coroutine since the async callback API varies by version.
-        // This provides a clean upgrade path.
-        withContext(Dispatchers.IO) {
-            try {
-                val result = llm.generateResponse(prompt)
-                trySend(result)
-                close()
-            } catch (e: Exception) {
-                close(e)
-            }
-        }
-
-        awaitClose()
+        emit(result)
     }
 
     private fun buildPrompt(systemPrompt: String, messages: List<ChatMessage>): String {
