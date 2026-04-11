@@ -28,8 +28,7 @@ fun ModelManagementScreen(
     val modelState by viewModel.modelState.collectAsStateWithLifecycle()
     val modelFiles by viewModel.modelFiles.collectAsStateWithLifecycle()
     val loadError by viewModel.loadError.collectAsStateWithLifecycle()
-
-    var selectedPrecision by remember { mutableStateOf(ModelPrecision.SFP8) }
+    val downloadState by viewModel.downloadState.collectAsStateWithLifecycle()
 
     val filePickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument()
@@ -108,29 +107,70 @@ fun ModelManagementScreen(
 
             HorizontalDivider()
 
-            // Precision selector
-            Text("Precision", style = MaterialTheme.typography.titleSmall)
+            // Recommended model download
+            Text("Recommended Model", style = MaterialTheme.typography.titleSmall)
 
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            Card(
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.secondaryContainer
+                )
             ) {
-                ModelPrecision.entries.forEach { precision ->
-                    FilterChip(
-                        selected = selectedPrecision == precision,
-                        onClick = { selectedPrecision = precision },
-                        label = { Text(precision.displayName) },
-                        modifier = Modifier.weight(1f)
-                    )
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("Gemma 4 E4B", style = MaterialTheme.typography.titleMedium)
+                            Text(
+                                "3.65 GB · Apache 2.0 · No login required",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.7f)
+                            )
+                        }
+                        Spacer(Modifier.width(8.dp))
+                        when (val state = downloadState) {
+                            is DownloadState.Idle -> {
+                                Button(onClick = { viewModel.downloadGemma4() }) { Text("Download") }
+                            }
+                            is DownloadState.Downloading -> {
+                                OutlinedButton(onClick = { viewModel.cancelDownload() }) { Text("Cancel") }
+                            }
+                            is DownloadState.Completed -> {
+                                Icon(
+                                    Icons.Default.CheckCircle,
+                                    contentDescription = "Downloaded",
+                                    tint = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(32.dp)
+                                )
+                            }
+                            is DownloadState.Failed -> {
+                                Button(onClick = { viewModel.downloadGemma4() }) { Text("Retry") }
+                            }
+                        }
+                    }
+                    when (val state = downloadState) {
+                        is DownloadState.Downloading -> {
+                            if (state.progress != null) {
+                                LinearProgressIndicator(
+                                    progress = { state.progress },
+                                    modifier = Modifier.fillMaxWidth()
+                                )
+                            } else {
+                                LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                            }
+                        }
+                        is DownloadState.Failed -> {
+                            Text(
+                                "Error: ${state.message}",
+                                color = MaterialTheme.colorScheme.error,
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                        }
+                        else -> {}
+                    }
                 }
             }
-
-            Text(
-                "SFP8 (~7.5GB) gives better quality. Q4 (~4.5GB) uses less RAM. " +
-                    "Your OnePlus 13 has 16GB, so SFP8 is recommended.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
 
             HorizontalDivider()
 
@@ -155,7 +195,7 @@ fun ModelManagementScreen(
                         Text("No model files found")
                         Spacer(Modifier.height(4.dp))
                         Text(
-                            "Import a Gemma 4 E4B .task file",
+                            "Download Gemma 4 E4B above, or import a model file.",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -168,7 +208,7 @@ fun ModelManagementScreen(
                         supportingContent = { Text(file.path) },
                         trailingContent = {
                             Button(
-                                onClick = { viewModel.loadModel(file.path, file.name, selectedPrecision) },
+                                onClick = { viewModel.loadModel(file.path, file.name, ModelPrecision.Q4) },
                                 enabled = modelState !is ModelState.Loading
                             ) { Text("Load") }
                         }
@@ -183,7 +223,7 @@ fun ModelManagementScreen(
             ) {
                 Icon(Icons.Default.FileOpen, null)
                 Spacer(Modifier.width(8.dp))
-                Text("Import .task File")
+                Text("Import Model File")
             }
 
             loadError?.let { error ->

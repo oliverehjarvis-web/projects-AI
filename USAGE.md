@@ -35,41 +35,33 @@ Don't create a project yet — load the model first.
 
 ## 2. Load the Gemma 4 E4B model
 
-The app runs the model entirely on-device. You need to get the `.task` model file onto your phone and import it from the Settings screen.
+The app runs the model entirely on-device. The easiest way is to download it directly from the app.
 
-### 2a. Get the model file
+### 2a. Download in-app (recommended)
 
-Download a Gemma 4 E4B `.task` file:
+1. Tap the **⚙ Settings** icon → **Model Management**
+2. Under **Recommended Model**, tap **Download**
+3. A system notification shows download progress. The file is 3.65 GB — on good Wi-Fi, expect 5–10 minutes.
+4. When the download finishes, the model appears under **Available Models** and the button shows a tick ✓.
 
-- **SFP8 variant (~7.5 GB)** — better quality, recommended for your OnePlus 13 (16 GB RAM)
-- **Q4 variant (~4.5 GB)** — lower memory use, slightly reduced quality
+> Download over Wi-Fi, not mobile data.
 
-Sources:
-- [Kaggle — Google / Gemma](https://www.kaggle.com/models/google/gemma) (the "LiteRT" / "MediaPipe" variants come as `.task` files)
-- Or convert a Hugging Face Gemma 4 E4B checkpoint using the [MediaPipe model conversion tools](https://developers.google.com/mediapipe/solutions/genai/llm_inference/android#convert_model)
+### 2b. Load the model
 
-### 2b. Transfer it to the phone
+Once downloaded (or imported — see 2c), tap **Load** next to the file.
 
-Put the `.task` file somewhere accessible on the phone — the Downloads folder is fine. USB cable + file transfer, or AirDrop/KDE Connect/Snapdrop both work.
+The status card will show "Loading..." then "Loaded". The top-bar chip on every other screen will change from **"No model"** to the model name.
 
-### 2c. Import it into the app
+> If loading fails with an OOM error, close memory-hungry apps (Chrome, Maps, etc.) and try again.
 
-1. In the app, tap the **⚙ Settings** icon in the top-right of the Home screen
-2. Tap **Model Management**
-3. Tap **Import .task File** at the bottom
-4. Browse to and select your downloaded `.task` file
-5. The app copies it into its private storage (`Android/data/com.oli.projectsai/files/models/`). This can take a minute or two for a 7 GB file.
+### 2c. Manual import (alternative)
 
-### 2d. Load the model
+If you prefer to download the file outside the app:
 
-Back on the Model Management screen, you'll now see your file under **Available Models**.
-
-1. At the top, pick your **Precision**: **SFP8** (recommended) or **Q4**
-2. Tap **Load** next to the model file
-
-The status card will show "Loading..." and then "Loaded". The top-bar chip on every other screen will change from **"No model"** to showing the precision.
-
-> If loading fails with an OOM error, close memory-hungry apps (Chrome, Maps, etc.) and try again. If it still fails with SFP8, try Q4.
+- File: `gemma-4-E4B-it.litertlm` (3.65 GB)
+- Source: [huggingface.co/litert-community/gemma-4-E4B-it-litert-lm](https://huggingface.co/litert-community/gemma-4-E4B-it-litert-lm) — Apache 2.0, no login required
+- Transfer to phone (USB, AirDrop, KDE Connect/Snapdrop, etc.)
+- In Model Management, tap **Import Model File** and select it
 
 ---
 
@@ -228,7 +220,7 @@ The app follows your system dark/light setting. On Android 12+ it also picks up 
 |---|---|
 | **"No model loaded"** error when sending a chat | Go to Settings → Model Management and tap **Load** next to your model file |
 | **Model load fails with OOM** | Close other apps (Chrome/Maps/games) and try again. If SFP8 still OOMs, switch to Q4 |
-| **Import .task fails** | Make sure the file is actually a MediaPipe-format `.task` file, not a raw Hugging Face checkpoint |
+| **Import model file fails** | Make sure the file is a `.litertlm` or `.task` MediaPipe-format file, not a raw Hugging Face checkpoint |
 | **Chat feels slow on first message** | First inference warms the KV cache; subsequent responses are faster. If it's still slow, try Q4 |
 | **App won't install (APK rejected)** | Enable "Install unknown apps" for your browser/file manager in system settings |
 | **Memory token counter looks wrong** | The count is currently a ~3.5 chars/token approximation — it's a budget indicator, not a precise figure. Will be replaced with the real tokeniser in a future version |
