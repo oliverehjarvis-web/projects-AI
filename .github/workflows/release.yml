@@ -16,7 +16,7 @@ permissions:
 jobs:
   release:
     name: Build and publish APK
-    runs-on: [self-hosted, macOS]
+    runs-on: [self-hosted, Linux, truenas]
 
     steps:
       - name: Checkout

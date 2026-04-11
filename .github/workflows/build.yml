@@ -10,7 +10,7 @@ on:
 jobs:
   build:
     name: Build debug APK
-    runs-on: [self-hosted, macOS]
+    runs-on: [self-hosted, Linux, truenas]
 
     steps:
       - name: Checkout
