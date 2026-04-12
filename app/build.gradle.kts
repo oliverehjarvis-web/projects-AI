@@ -73,8 +73,8 @@ dependencies {
     implementation("com.google.dagger:hilt-android:2.53.1")
     ksp("com.google.dagger:hilt-android-compiler:2.53.1")
 
-    // MediaPipe LLM Inference
-    implementation("com.google.mediapipe:tasks-genai:0.10.22")
+    // LiteRT-LM on-device inference (supports .litertlm model files)
+    implementation("com.google.ai.edge.litertlm:litertlm-android:0.10.1")
 
     // Coroutines
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")

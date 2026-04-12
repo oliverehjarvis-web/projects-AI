@@ -2,11 +2,16 @@ package com.oli.projectsai.inference
 
 import android.content.Context
 import android.util.Log
-import com.google.mediapipe.tasks.genai.llminference.LlmInference
+import com.google.ai.edge.litertlm.Backend
+import com.google.ai.edge.litertlm.Contents
+import com.google.ai.edge.litertlm.ConversationConfig
+import com.google.ai.edge.litertlm.Engine
+import com.google.ai.edge.litertlm.EngineConfig
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.withContext
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -17,34 +22,35 @@ class LocalMediaPipeBackend @Inject constructor(
 ) : InferenceBackend {
 
     companion object {
-        private const val TAG = "LocalMediaPipe"
+        private const val TAG = "LocalLiteRT"
     }
 
     override val id: String = "local_mediapipe"
-    override val displayName: String = "Local (MediaPipe)"
+    override val displayName: String = "Local (LiteRT)"
     override val isAvailable: Boolean = true
 
-    private var inference: LlmInference? = null
+    private var engine: Engine? = null
     private var _loadedModel: ModelInfo? = null
 
-    override val isLoaded: Boolean get() = inference != null
+    override val isLoaded: Boolean get() = engine != null
     override val loadedModel: ModelInfo? get() = _loadedModel
 
     override suspend fun loadModel(modelInfo: ModelInfo) {
         withContext(Dispatchers.IO) {
             unloadModel()
             try {
-                val options = LlmInference.LlmInferenceOptions.builder()
-                    .setModelPath(modelInfo.filePath)
-                    .setMaxTokens(modelInfo.contextLength)
-                    .build()
-
-                inference = LlmInference.createFromOptions(context, options)
+                val engineConfig = EngineConfig(
+                    modelPath = modelInfo.filePath,
+                    backend = Backend.CPU()
+                )
+                val e = Engine(engineConfig)
+                e.initialize()
+                engine = e
                 _loadedModel = modelInfo
-                Log.i(TAG, "Model loaded: ${modelInfo.name} (${modelInfo.precision.displayName})")
+                Log.i(TAG, "Model loaded: ${modelInfo.name}")
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to load model", e)
-                inference = null
+                engine = null
                 _loadedModel = null
                 throw e
             }
@@ -52,8 +58,10 @@ class LocalMediaPipeBackend @Inject constructor(
     }
 
     override suspend fun unloadModel() {
-        inference?.close()
-        inference = null
+        withContext(Dispatchers.IO) {
+            engine?.close()
+        }
+        engine = null
         _loadedModel = null
     }
 
@@ -61,49 +69,49 @@ class LocalMediaPipeBackend @Inject constructor(
         systemPrompt: String,
         messages: List<ChatMessage>,
         config: GenerationConfig
-    ): Flow<String> = flow {
-        val llm = inference ?: throw IllegalStateException("Model not loaded")
-        val prompt = buildPrompt(systemPrompt, messages)
+    ): Flow<String> {
+        val e = engine ?: throw IllegalStateException("Model not loaded")
 
-        // v1 uses the synchronous API and emits the full response as a single chunk.
-        // TODO: switch to generateResponseAsync with a ProgressListener for true
-        //       token streaming once we have an end-to-end happy path with the model.
-        val result = withContext(Dispatchers.IO) {
-            llm.generateResponse(prompt)
-        }
-        emit(result)
+        // Build a combined system instruction: project context + prior conversation turns.
+        // Passed via ConversationConfig so the model has full context before each reply.
+        val fullContext = buildFullContext(systemPrompt, messages.dropLast(1))
+        val systemInstruction = if (fullContext.isNotBlank()) Contents.of(fullContext) else null
+        val conversationConfig = ConversationConfig(systemInstruction = systemInstruction)
+
+        return flow {
+            val conversation = e.createConversation(conversationConfig)
+            val lastUserMessage = messages.lastOrNull { it.role == "user" }?.content
+                ?: throw IllegalArgumentException("No user message to respond to")
+
+            // sendMessageAsync streams incremental tokens as Flow<Message>
+            conversation.sendMessageAsync(lastUserMessage)
+                .collect { message ->
+                    val chunk = message.text
+                    if (chunk.isNotEmpty()) emit(chunk)
+                }
+        }.flowOn(Dispatchers.IO)
     }
 
-    private fun buildPrompt(systemPrompt: String, messages: List<ChatMessage>): String {
-        // Gemma 4 chat template format
-        val sb = StringBuilder()
-
+    /**
+     * Combines the project system prompt with prior conversation turns into a single
+     * context string for ConversationConfig.systemInstruction.
+     */
+    private fun buildFullContext(systemPrompt: String, priorMessages: List<ChatMessage>): String {
+        val parts = mutableListOf<String>()
         if (systemPrompt.isNotBlank()) {
-            sb.append("<start_of_turn>system\n")
-            sb.append(systemPrompt)
-            sb.append("<end_of_turn>\n")
+            parts.add(systemPrompt)
         }
-
-        for (msg in messages) {
-            val role = when (msg.role) {
-                "user" -> "user"
-                "model", "assistant" -> "model"
-                else -> msg.role
+        if (priorMessages.isNotEmpty()) {
+            val history = priorMessages.joinToString("\n") { msg ->
+                val label = if (msg.role == "user") "User" else "Assistant"
+                "$label: ${msg.content}"
             }
-            sb.append("<start_of_turn>$role\n")
-            sb.append(msg.content)
-            sb.append("<end_of_turn>\n")
+            parts.add("Prior conversation:\n$history")
         }
-
-        // Signal the model to generate
-        sb.append("<start_of_turn>model\n")
-        return sb.toString()
+        return parts.joinToString("\n\n")
     }
 
     override suspend fun countTokens(text: String): Int {
-        // MediaPipe doesn't expose a public tokeniser count.
-        // Use a reasonable approximation: ~3.5 chars per token for English.
-        // This will be replaced with actual tokeniser calls when the API supports it.
         return (text.length / 3.5).toInt().coerceAtLeast(1)
     }
 }
