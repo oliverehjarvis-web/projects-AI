@@ -136,18 +136,22 @@ class ChatViewModel @Inject constructor(
                 _chatTitle.value = title
             }
 
-            // Generate response
-            generate()
+            // Generate response — pass the trimmed content directly so the inference
+            // layer sees it immediately, without waiting for the Room Flow to update
+            // _messages.value (which can arrive after generate() reads it).
+            generate(currentUserContent = content.trim())
         }
     }
 
-    private suspend fun generate() {
+    private suspend fun generate(currentUserContent: String? = null) {
         _isGenerating.value = true
         _streamingContent.value = ""
         _error.value = null
 
         try {
-            val chatMessages = _messages.value.map { msg ->
+            // Build from whatever is already in _messages.value, then append the
+            // current user turn if the DB flow hasn't surfaced it yet.
+            val dbMessages = _messages.value.map { msg ->
                 ChatMessage(
                     role = when (msg.role) {
                         MessageRole.USER -> "user"
@@ -156,6 +160,12 @@ class ChatViewModel @Inject constructor(
                     },
                     content = msg.content
                 )
+            }
+            val chatMessages = if (currentUserContent != null &&
+                dbMessages.lastOrNull()?.content != currentUserContent) {
+                dbMessages + ChatMessage(role = "user", content = currentUserContent)
+            } else {
+                dbMessages
             }
 
             val responseFlow = inferenceManager.generate(
