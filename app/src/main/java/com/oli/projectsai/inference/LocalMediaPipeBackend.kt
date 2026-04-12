@@ -3,6 +3,7 @@ package com.oli.projectsai.inference
 import android.content.Context
 import android.util.Log
 import com.google.ai.edge.litertlm.Backend
+import com.google.ai.edge.litertlm.Content
 import com.google.ai.edge.litertlm.Contents
 import com.google.ai.edge.litertlm.ConversationConfig
 import com.google.ai.edge.litertlm.Engine
@@ -75,7 +76,7 @@ class LocalMediaPipeBackend @Inject constructor(
         // Build a combined system instruction: project context + prior conversation turns.
         // Passed via ConversationConfig so the model has full context before each reply.
         val fullContext = buildFullContext(systemPrompt, messages.dropLast(1))
-        val systemInstruction = if (fullContext.isNotBlank()) Contents.of(fullContext) else null
+        val systemInstruction: Contents? = if (fullContext.isNotBlank()) Contents.of(fullContext) else null
         val conversationConfig = ConversationConfig(systemInstruction = systemInstruction)
 
         return flow {
@@ -83,10 +84,13 @@ class LocalMediaPipeBackend @Inject constructor(
             val lastUserMessage = messages.lastOrNull { it.role == "user" }?.content
                 ?: throw IllegalArgumentException("No user message to respond to")
 
-            // sendMessageAsync streams incremental tokens as Flow<Message>
+            // sendMessageAsync streams incremental tokens as Flow<Message>.
+            // Text is extracted from the Content.Text items in each message's contents list.
             conversation.sendMessageAsync(lastUserMessage)
                 .collect { message ->
-                    val chunk = message.text
+                    val chunk = message.contents.contents
+                        .filterIsInstance<Content.Text>()
+                        .joinToString("") { it.text }
                     if (chunk.isNotEmpty()) emit(chunk)
                 }
         }.flowOn(Dispatchers.IO)
