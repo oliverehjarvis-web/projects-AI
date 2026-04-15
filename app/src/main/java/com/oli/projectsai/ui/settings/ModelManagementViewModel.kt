@@ -36,6 +36,7 @@ class ModelManagementViewModel @Inject constructor(
     companion object {
         const val GEMMA4_URL = "https://huggingface.co/litert-community/gemma-4-E4B-it-litert-lm/resolve/main/gemma-4-E4B-it.litertlm"
         const val GEMMA4_FILENAME = "gemma-4-E4B-it.litertlm"
+        private const val STALL_TIMEOUT_MS = 60_000L
     }
 
     val modelState: StateFlow<ModelState> = inferenceManager.modelState
@@ -115,6 +116,8 @@ class ModelManagementViewModel @Inject constructor(
     }
 
     private suspend fun pollDownloadProgress() {
+        var lastProgressBytes = 0L
+        var lastProgressAt = System.currentTimeMillis()
         while (true) {
             val cursor = downloadManager.query(DownloadManager.Query().setFilterById(activeDownloadId))
             if (cursor == null || !cursor.moveToFirst()) {
@@ -136,9 +139,22 @@ class ModelManagementViewModel @Inject constructor(
                     _downloadState.value = DownloadState.Failed("Download failed")
                     return
                 }
-                else -> _downloadState.value = DownloadState.Downloading(
-                    if (total > 0) downloaded.toFloat() / total else null
-                )
+                else -> {
+                    if (downloaded > lastProgressBytes) {
+                        lastProgressBytes = downloaded
+                        lastProgressAt = System.currentTimeMillis()
+                    } else if (System.currentTimeMillis() - lastProgressAt > STALL_TIMEOUT_MS) {
+                        downloadManager.remove(activeDownloadId)
+                        activeDownloadId = -1L
+                        _downloadState.value = DownloadState.Failed(
+                            "Download stalled — check your network and retry."
+                        )
+                        return
+                    }
+                    _downloadState.value = DownloadState.Downloading(
+                        if (total > 0) downloaded.toFloat() / total else null
+                    )
+                }
             }
             kotlinx.coroutines.delay(1_000)
         }

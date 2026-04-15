@@ -103,11 +103,16 @@ fun ChatScreen(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text(
-                            err,
+                            err.message,
                             modifier = Modifier.weight(1f),
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onErrorContainer
                         )
+                        if (err.retryable) {
+                            TextButton(onClick = { viewModel.retryLastPrompt() }) {
+                                Text("Retry")
+                            }
+                        }
                         IconButton(onClick = { viewModel.dismissError() }) {
                             Icon(Icons.Default.Close, "Dismiss")
                         }

@@ -56,7 +56,7 @@ class LocalMediaPipeBackend @Inject constructor(
                 Log.e(TAG, "Failed to load model", e)
                 engine = null
                 _loadedModel = null
-                throw e
+                throw InferenceError.LoadFailed(e)
             }
         }
     }
@@ -74,28 +74,32 @@ class LocalMediaPipeBackend @Inject constructor(
         messages: List<ChatMessage>,
         config: GenerationConfig
     ): Flow<String> {
-        val e = engine ?: throw IllegalStateException("Model not loaded")
+        val e = engine ?: throw InferenceError.ModelNotLoaded
 
-        // Build a combined system instruction: project context + prior conversation turns.
-        // Passed via ConversationConfig so the model has full context before each reply.
         val fullContext = buildFullContext(systemPrompt, messages.dropLast(1))
         val systemInstruction: Contents? = if (fullContext.isNotBlank()) Contents.of(fullContext) else null
         val conversationConfig = ConversationConfig(systemInstruction = systemInstruction)
 
         return flow {
-            e.createConversation(conversationConfig).use { conversation ->
-                val lastUserMessage = messages.lastOrNull { it.role == "user" }?.content
-                    ?: throw IllegalArgumentException("No user message to respond to")
+            try {
+                e.createConversation(conversationConfig).use { conversation ->
+                    val lastUserMessage = messages.lastOrNull { it.role == "user" }?.content
+                        ?: throw InferenceError.GenerationFailed(
+                            IllegalArgumentException("No user message to respond to")
+                        )
 
-                // sendMessageAsync streams incremental tokens as Flow<Message>.
-                // Text is extracted from the Content.Text items in each message's contents list.
-                conversation.sendMessageAsync(lastUserMessage)
-                    .collect { message ->
-                        val chunk = message.contents.contents
-                            .filterIsInstance<Content.Text>()
-                            .joinToString("") { it.text }
-                        if (chunk.isNotEmpty()) emit(chunk)
-                    }
+                    conversation.sendMessageAsync(lastUserMessage)
+                        .collect { message ->
+                            val chunk = message.contents.contents
+                                .filterIsInstance<Content.Text>()
+                                .joinToString("") { it.text }
+                            if (chunk.isNotEmpty()) emit(chunk)
+                        }
+                }
+            } catch (ie: InferenceError) {
+                throw ie
+            } catch (t: Throwable) {
+                throw InferenceError.GenerationFailed(t)
             }
         }.flowOn(Dispatchers.IO)
     }
@@ -120,21 +124,26 @@ class LocalMediaPipeBackend @Inject constructor(
     }
 
     override suspend fun transcribe(pcm16MonoBytes: ByteArray): String = withContext(Dispatchers.IO) {
-        val e = engine ?: throw IllegalStateException("Model not loaded")
+        val e = engine ?: throw InferenceError.ModelNotLoaded
         require(pcm16MonoBytes.isNotEmpty()) { "Empty audio buffer" }
 
-        // Disposable conversation so no transcription state leaks into chat history.
-        e.createConversation(ConversationConfig()).use { conversation ->
-            val response = conversation.sendMessage(
-                Contents.of(
-                    Content.AudioBytes(pcm16MonoBytes),
-                    Content.Text(TRANSCRIBE_PROMPT)
+        try {
+            e.createConversation(ConversationConfig()).use { conversation ->
+                val response = conversation.sendMessage(
+                    Contents.of(
+                        Content.AudioBytes(pcm16MonoBytes),
+                        Content.Text(TRANSCRIBE_PROMPT)
+                    )
                 )
-            )
-            response.contents.contents
-                .filterIsInstance<Content.Text>()
-                .joinToString("") { it.text }
-                .trim()
+                response.contents.contents
+                    .filterIsInstance<Content.Text>()
+                    .joinToString("") { it.text }
+                    .trim()
+            }
+        } catch (ie: InferenceError) {
+            throw ie
+        } catch (t: Throwable) {
+            throw InferenceError.TranscriptionFailed(t)
         }
     }
 

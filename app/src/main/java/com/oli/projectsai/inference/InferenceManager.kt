@@ -41,9 +41,12 @@ class InferenceManager @Inject constructor(
         try {
             backend.loadModel(modelInfo)
             _modelState.value = ModelState.Loaded(modelInfo)
+        } catch (ie: InferenceError) {
+            _modelState.value = ModelState.Error(ie.message ?: "Failed to load model")
+            throw ie
         } catch (e: Exception) {
             _modelState.value = ModelState.Error(e.message ?: "Failed to load model")
-            throw e
+            throw InferenceError.LoadFailed(e)
         }
     }
 
@@ -61,21 +64,22 @@ class InferenceManager @Inject constructor(
         val backend = if (backendId != null) {
             backends[backendId] ?: throw IllegalArgumentException("Unknown backend: $backendId")
         } else {
-            getActiveBackend() ?: throw IllegalStateException("No model loaded")
+            getActiveBackend() ?: throw InferenceError.ModelNotLoaded
         }
         return backend.generate(systemPrompt, messages, config)
     }
 
     suspend fun transcribe(pcm16MonoBytes: ByteArray): String {
-        val backend = getActiveBackend() ?: throw IllegalStateException("No model loaded")
+        val backend = getActiveBackend() ?: throw InferenceError.ModelNotLoaded
         return backend.transcribe(pcm16MonoBytes)
     }
 
+    /** Returns 0 when no backend is active rather than crashing — callers must tolerate this. */
     suspend fun countTokens(text: String, backendId: String? = null): Int {
         val backend = if (backendId != null) {
             backends[backendId] ?: throw IllegalArgumentException("Unknown backend: $backendId")
         } else {
-            getActiveBackend() ?: backends.values.first()
+            getActiveBackend() ?: return 0
         }
         return backend.countTokens(text)
     }

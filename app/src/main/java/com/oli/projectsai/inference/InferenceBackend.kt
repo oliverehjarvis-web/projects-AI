@@ -30,6 +30,23 @@ data class ModelInfo(
 /** 16 kHz mono PCM 16-bit samples; Gemma 4 audio input is capped at this duration. */
 const val TRANSCRIPTION_MAX_SECONDS = 30
 
+sealed class InferenceError(message: String, cause: Throwable? = null) : Exception(message, cause) {
+    data object ModelNotLoaded : InferenceError("No model is loaded.")
+    data object Cancelled : InferenceError("Generation cancelled.")
+    class GenerationFailed(cause: Throwable) : InferenceError(
+        cause.message ?: "Generation failed",
+        cause
+    )
+    class TranscriptionFailed(cause: Throwable) : InferenceError(
+        cause.message ?: "Transcription failed",
+        cause
+    )
+    class LoadFailed(cause: Throwable) : InferenceError(
+        cause.message ?: "Failed to load model",
+        cause
+    )
+}
+
 interface InferenceBackend {
     val id: String
     val displayName: String

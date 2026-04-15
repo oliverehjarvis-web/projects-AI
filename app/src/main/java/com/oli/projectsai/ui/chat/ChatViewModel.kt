@@ -14,6 +14,7 @@ import com.oli.projectsai.data.repository.ChatRepository
 import com.oli.projectsai.data.repository.ProjectRepository
 import com.oli.projectsai.inference.ChatMessage
 import com.oli.projectsai.inference.GenerationConfig
+import com.oli.projectsai.inference.InferenceError
 import com.oli.projectsai.inference.InferenceManager
 import com.oli.projectsai.ui.components.TokenBreakdown
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -56,8 +57,12 @@ class ChatViewModel @Inject constructor(
     private val _tokenBreakdown = MutableStateFlow(TokenBreakdown())
     val tokenBreakdown: StateFlow<TokenBreakdown> = _tokenBreakdown.asStateFlow()
 
-    private val _error = MutableStateFlow<String?>(null)
-    val error: StateFlow<String?> = _error.asStateFlow()
+    data class ChatError(val message: String, val retryable: Boolean)
+
+    private val _error = MutableStateFlow<ChatError?>(null)
+    val error: StateFlow<ChatError?> = _error.asStateFlow()
+
+    private var lastFailedUserContent: String? = null
 
     private val _chatTitle = MutableStateFlow("New Chat")
     val chatTitle: StateFlow<String> = _chatTitle.asStateFlow()
@@ -124,28 +129,39 @@ class ChatViewModel @Inject constructor(
     fun sendMessage(content: String) {
         if (content.isBlank() || _isGenerating.value) return
 
+        val trimmed = content.trim()
         viewModelScope.launch {
-            // Save user message
-            val userMsg = Message(
-                chatId = activeChatId,
-                role = MessageRole.USER,
-                content = content.trim(),
-                tokenCount = inferenceManager.countTokens(content)
-            )
-            chatRepository.addMessage(userMsg)
+            val persisted = try {
+                chatRepository.addMessage(
+                    Message(
+                        chatId = activeChatId,
+                        role = MessageRole.USER,
+                        content = trimmed,
+                        tokenCount = inferenceManager.countTokens(trimmed)
+                    )
+                )
+                true
+            } catch (t: Throwable) {
+                _error.value = ChatError("Couldn't save your message: ${t.message}", retryable = false)
+                false
+            }
+            if (!persisted) return@launch
 
-            // Auto-title from first message
             if (_messages.value.isEmpty()) {
-                val title = content.take(50).let { if (content.length > 50) "$it..." else it }
-                chatRepository.updateChatTitle(activeChatId, title)
+                val title = trimmed.take(50).let { if (trimmed.length > 50) "$it..." else it }
+                runCatching { chatRepository.updateChatTitle(activeChatId, title) }
                 _chatTitle.value = title
             }
 
-            // Generate response — pass the trimmed content directly so the inference
-            // layer sees it immediately, without waiting for the Room Flow to update
-            // _messages.value (which can arrive after generate() reads it).
-            generate(currentUserContent = content.trim())
+            generate(currentUserContent = trimmed)
         }
+    }
+
+    fun retryLastPrompt() {
+        val content = lastFailedUserContent ?: return
+        if (_isGenerating.value) return
+        _error.value = null
+        generationJob = viewModelScope.launch { generate(currentUserContent = content) }
     }
 
     private suspend fun generate(currentUserContent: String? = null) {
@@ -153,9 +169,8 @@ class ChatViewModel @Inject constructor(
         _streamingContent.value = ""
         _error.value = null
 
+        val fullResponse = StringBuilder()
         try {
-            // Build from whatever is already in _messages.value, then append the
-            // current user turn if the DB flow hasn't surfaced it yet.
             val dbMessages = _messages.value.map { msg ->
                 ChatMessage(
                     role = when (msg.role) {
@@ -179,26 +194,45 @@ class ChatViewModel @Inject constructor(
                 config = GenerationConfig()
             )
 
-            val fullResponse = StringBuilder()
             responseFlow.collect { token ->
                 fullResponse.append(token)
                 _streamingContent.value = fullResponse.toString()
             }
 
-            // Save assistant message
             val responseText = fullResponse.toString()
             if (responseText.isNotBlank()) {
-                chatRepository.addMessage(
-                    Message(
-                        chatId = activeChatId,
-                        role = MessageRole.ASSISTANT,
-                        content = responseText,
-                        tokenCount = inferenceManager.countTokens(responseText)
+                lastFailedUserContent = null
+                try {
+                    chatRepository.addMessage(
+                        Message(
+                            chatId = activeChatId,
+                            role = MessageRole.ASSISTANT,
+                            content = responseText,
+                            tokenCount = inferenceManager.countTokens(responseText)
+                        )
                     )
-                )
+                } catch (t: Throwable) {
+                    _error.value = ChatError(
+                        "Response generated but failed to save: ${t.message}",
+                        retryable = false
+                    )
+                }
             }
-        } catch (e: Exception) {
-            _error.value = e.message ?: "Generation failed"
+        } catch (ie: InferenceError) {
+            lastFailedUserContent = currentUserContent
+            _error.value = when (ie) {
+                is InferenceError.ModelNotLoaded ->
+                    ChatError("Load a model to start generating.", retryable = false)
+                is InferenceError.Cancelled ->
+                    ChatError("Generation cancelled.", retryable = true)
+                is InferenceError.GenerationFailed,
+                is InferenceError.TranscriptionFailed,
+                is InferenceError.LoadFailed ->
+                    ChatError(ie.message ?: "Generation failed.", retryable = true)
+            }
+        } catch (t: Throwable) {
+            lastFailedUserContent = currentUserContent
+            _error.value = ChatError(t.message ?: "Generation failed.", retryable = true)
         } finally {
             _isGenerating.value = false
             _streamingContent.value = ""
