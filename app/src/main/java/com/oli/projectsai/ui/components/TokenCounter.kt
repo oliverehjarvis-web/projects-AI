@@ -27,6 +27,7 @@ data class TokenBreakdown(
     val remaining get() = (contextLimit - total).coerceAtLeast(0)
     val usagePercent get() = if (contextLimit > 0) total.toFloat() / contextLimit else 0f
     val isWarning get() = usagePercent > 0.75f
+    val isCritical get() = usagePercent > 0.85f
 }
 
 @Composable
