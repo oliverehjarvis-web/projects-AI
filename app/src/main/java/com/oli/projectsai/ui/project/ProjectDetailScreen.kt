@@ -1,5 +1,6 @@
 package com.oli.projectsai.ui.project
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -20,6 +21,7 @@ import com.oli.projectsai.data.db.entity.Chat
 import com.oli.projectsai.data.db.entity.QuickAction
 import com.oli.projectsai.ui.theme.TokenMemory
 import com.oli.projectsai.ui.theme.TokenSystemPrompt
+import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -38,6 +40,8 @@ fun ProjectDetailScreen(
     val memoryTokens by viewModel.memoryTokenCount.collectAsStateWithLifecycle()
     var showDeleteDialog by remember { mutableStateOf(false) }
     var showAddQuickAction by remember { mutableStateOf(false) }
+    val snackbarHostState = remember { SnackbarHostState() }
+    val scope = rememberCoroutineScope()
 
     val p = project
     if (p == null) {
@@ -70,7 +74,8 @@ fun ProjectDetailScreen(
             FloatingActionButton(onClick = { onNewChat(p.id, null) }) {
                 Icon(Icons.Default.Add, "New Chat")
             }
-        }
+        },
+        snackbarHost = { SnackbarHost(snackbarHostState) }
     ) { padding ->
         LazyColumn(
             modifier = Modifier
@@ -153,10 +158,12 @@ fun ProjectDetailScreen(
                 }
             } else {
                 items(chats, key = { it.id }) { chat ->
-                    ChatListItem(
+                    SwipeToDeleteChat(
                         chat = chat,
-                        onClick = { onOpenChat(chat.id) },
-                        onDelete = { viewModel.deleteChat(chat) }
+                        onDelete = { viewModel.deleteChat(chat) },
+                        snackbarHostState = snackbarHostState,
+                        scope = scope,
+                        onClick = { onOpenChat(chat.id) }
                     )
                 }
             }
@@ -191,6 +198,62 @@ fun ProjectDetailScreen(
                 viewModel.createQuickAction(name, template)
                 showAddQuickAction = false
             }
+        )
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun SwipeToDeleteChat(
+    chat: Chat,
+    onDelete: () -> Unit,
+    snackbarHostState: SnackbarHostState,
+    scope: kotlinx.coroutines.CoroutineScope,
+    onClick: () -> Unit
+) {
+    val dismissState = rememberSwipeToDismissBoxState(
+        confirmValueChange = { it == SwipeToDismissBoxValue.EndToStart }
+    )
+
+    // When the item reaches the dismissed position, show snackbar and decide fate
+    LaunchedEffect(dismissState.currentValue) {
+        if (dismissState.currentValue == SwipeToDismissBoxValue.EndToStart) {
+            val result = snackbarHostState.showSnackbar(
+                message = "Chat deleted",
+                actionLabel = "Undo",
+                duration = SnackbarDuration.Short
+            )
+            if (result == SnackbarResult.ActionPerformed) {
+                dismissState.reset()
+            } else {
+                onDelete()
+            }
+        }
+    }
+
+    SwipeToDismissBox(
+        state = dismissState,
+        backgroundContent = {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(MaterialTheme.colorScheme.errorContainer),
+                contentAlignment = Alignment.CenterEnd
+            ) {
+                Icon(
+                    Icons.Default.Delete,
+                    contentDescription = "Delete",
+                    modifier = Modifier.padding(end = 20.dp),
+                    tint = MaterialTheme.colorScheme.onErrorContainer
+                )
+            }
+        },
+        enableDismissFromStartToEnd = false
+    ) {
+        ChatListItem(
+            chat = chat,
+            onClick = onClick,
+            onDelete = onDelete
         )
     }
 }
