@@ -274,6 +274,14 @@ class ChatViewModel @Inject constructor(
         clipboard.setPrimaryClip(ClipData.newPlainText("Projects AI", text))
     }
 
+    fun shareConversation() {
+        val text = messages.value.joinToString("\n\n") { msg ->
+            val role = if (msg.role == MessageRole.USER) "You" else "Assistant"
+            "$role: ${msg.content}"
+        }
+        shareText(text)
+    }
+
     fun shareText(text: String) {
         val intent = Intent(Intent.ACTION_SEND).apply {
             type = "text/plain"

@@ -64,6 +64,9 @@ fun ChatScreen(
                     }
                 },
                 actions = {
+                    IconButton(onClick = { viewModel.shareConversation() }) {
+                        Icon(Icons.Default.Share, "Export conversation")
+                    }
                     IconButton(onClick = { showContextDialog = true }) {
                         Icon(Icons.Default.Info, "View Context")
                     }
