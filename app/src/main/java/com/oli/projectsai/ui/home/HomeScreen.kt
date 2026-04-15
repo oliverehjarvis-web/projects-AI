@@ -13,6 +13,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -184,7 +185,7 @@ private fun ModelStatusChip(modelState: ModelState) {
     val (label, color) = when (modelState) {
         is ModelState.Unloaded -> "No model" to MaterialTheme.colorScheme.onSurfaceVariant
         is ModelState.Loading -> "Loading..." to MaterialTheme.colorScheme.tertiary
-        is ModelState.Loaded -> modelState.modelInfo.precision.displayName to MaterialTheme.colorScheme.primary
+        is ModelState.Loaded -> stringResource(modelState.modelInfo.precision.displayNameRes) to MaterialTheme.colorScheme.primary
         is ModelState.Error -> "Error" to MaterialTheme.colorScheme.error
     }
     AssistChip(

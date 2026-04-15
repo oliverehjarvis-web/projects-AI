@@ -21,9 +21,9 @@ import javax.inject.Inject
 data class ModelFile(val name: String, val path: String)
 
 sealed class DownloadState {
-    object Idle : DownloadState()
+    data object Idle : DownloadState()
     data class Downloading(val progress: Float?) : DownloadState() // null = indeterminate
-    object Completed : DownloadState()
+    data object Completed : DownloadState()
     data class Failed(val message: String) : DownloadState()
 }
 

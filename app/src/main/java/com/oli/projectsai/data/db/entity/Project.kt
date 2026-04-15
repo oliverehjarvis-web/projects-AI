@@ -3,6 +3,7 @@ package com.oli.projectsai.data.db.entity
 import androidx.room.Entity
 import androidx.room.PrimaryKey
 
+@Deprecated("Reserved for future multi-backend support — not currently branched on in the UI.")
 enum class PreferredBackend { LOCAL, REMOTE }
 
 @Entity(tableName = "projects")

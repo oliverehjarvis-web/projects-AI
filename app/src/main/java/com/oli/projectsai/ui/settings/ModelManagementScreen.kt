@@ -16,6 +16,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.compose.ui.res.stringResource
 import com.oli.projectsai.inference.ModelPrecision
 import com.oli.projectsai.inference.ModelState
 
@@ -81,7 +82,7 @@ fun ModelManagementScreen(
                         is ModelState.Loaded -> {
                             Text("${state.modelInfo.name}")
                             Text(
-                                "${state.modelInfo.precision.displayName} | ~${state.modelInfo.precision.estimatedRamGb}GB RAM",
+                                "${stringResource(state.modelInfo.precision.displayNameRes)} | ~${state.modelInfo.precision.estimatedRamGb}GB RAM",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.7f)
                             )

@@ -1,5 +1,7 @@
 package com.oli.projectsai.inference
 
+import androidx.annotation.StringRes
+import com.oli.projectsai.R
 import kotlinx.coroutines.flow.Flow
 
 data class ChatMessage(
@@ -15,9 +17,9 @@ data class GenerationConfig(
     val randomSeed: Int = 0
 )
 
-enum class ModelPrecision(val displayName: String, val estimatedRamGb: Float) {
-    Q4("Q4 (4-bit quantised)", 4.5f),
-    SFP8("SFP8 (8-bit)", 7.5f)
+enum class ModelPrecision(@StringRes val displayNameRes: Int, val estimatedRamGb: Float) {
+    Q4(R.string.model_precision_q4, 4.5f),
+    SFP8(R.string.model_precision_sfp8, 7.5f)
 }
 
 data class ModelInfo(

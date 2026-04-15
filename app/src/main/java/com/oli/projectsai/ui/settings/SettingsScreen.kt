@@ -102,16 +102,6 @@ fun SettingsScreen(
                 )
             }
 
-            // Remote backend placeholder
-            ListItem(
-                headlineContent = { Text("Remote Backend") },
-                supportingContent = { Text("Coming soon - connect to a home NAS running a larger model") },
-                leadingContent = { Icon(Icons.Default.Cloud, null) },
-                trailingContent = {
-                    Text("TODO", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
-            )
-
             HorizontalDivider()
 
             // About section
@@ -122,7 +112,7 @@ fun SettingsScreen(
             )
             ListItem(
                 headlineContent = { Text("Projects AI") },
-                supportingContent = { Text("v1.0.0 - On-device AI with project context") },
+                supportingContent = { Text("v1.1.0 - On-device AI with project context") },
                 leadingContent = { Icon(Icons.Default.Info, null) }
             )
         }
