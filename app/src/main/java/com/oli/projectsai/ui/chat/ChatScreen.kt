@@ -253,7 +253,7 @@ private fun MessageBubble(
                 else
                     MaterialTheme.colorScheme.surfaceVariant
             ),
-            modifier = Modifier.widthIn(max = 320.dp)
+            modifier = Modifier.fillMaxWidth(0.85f)
         ) {
             Column(modifier = Modifier.padding(12.dp)) {
                 Text(
@@ -272,10 +272,10 @@ private fun MessageBubble(
             modifier = Modifier.padding(top = 2.dp),
             horizontalArrangement = Arrangement.spacedBy(4.dp)
         ) {
+            IconButton(onClick = onCopy, modifier = Modifier.size(28.dp)) {
+                Icon(Icons.Default.ContentCopy, "Copy", modifier = Modifier.size(14.dp))
+            }
             if (!isUser) {
-                IconButton(onClick = onCopy, modifier = Modifier.size(28.dp)) {
-                    Icon(Icons.Default.ContentCopy, "Copy", modifier = Modifier.size(14.dp))
-                }
                 IconButton(onClick = onShare, modifier = Modifier.size(28.dp)) {
                     Icon(Icons.Default.Share, "Share", modifier = Modifier.size(14.dp))
                 }
@@ -294,7 +294,7 @@ private fun StreamingBubble(content: String) {
             colors = CardDefaults.cardColors(
                 containerColor = MaterialTheme.colorScheme.surfaceVariant
             ),
-            modifier = Modifier.widthIn(max = 320.dp)
+            modifier = Modifier.fillMaxWidth(0.85f)
         ) {
             Text(
                 text = content,

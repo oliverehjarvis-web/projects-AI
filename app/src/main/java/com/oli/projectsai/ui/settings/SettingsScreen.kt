@@ -14,6 +14,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.oli.projectsai.BuildConfig
 import com.oli.projectsai.inference.ModelState
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -122,7 +123,7 @@ fun SettingsScreen(
             )
             ListItem(
                 headlineContent = { Text("Projects AI") },
-                supportingContent = { Text("v1.1.2 - On-device AI with project context") },
+                supportingContent = { Text("v${BuildConfig.VERSION_NAME} - On-device AI with project context") },
                 leadingContent = { Icon(Icons.Default.Info, null) }
             )
 
