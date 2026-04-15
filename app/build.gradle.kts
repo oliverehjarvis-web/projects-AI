@@ -6,6 +6,17 @@ plugins {
     id("com.google.dagger.hilt.android")
 }
 
+// Read github.token from local.properties (not committed) or a -P gradle property (CI).
+val githubToken: String = run {
+    val prop = project.findProperty("github.token") as String?
+    if (prop != null) return@run prop
+    val f = rootProject.file("local.properties")
+    if (f.exists()) {
+        val p = java.util.Properties().also { it.load(f.inputStream()) }
+        p.getProperty("github.token", "")
+    } else ""
+}
+
 android {
     namespace = "com.oli.projectsai"
     compileSdk = 35
@@ -16,6 +27,7 @@ android {
         targetSdk = 35
         versionCode = 3
         versionName = "1.1.2"
+        buildConfigField("String", "GITHUB_TOKEN", "\"$githubToken\"")
     }
 
     buildTypes {
