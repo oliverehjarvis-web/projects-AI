@@ -81,6 +81,7 @@ fun ChatScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
+                .imePadding()
         ) {
             // Token counter (compact or full)
             TokenCounter(
