@@ -19,6 +19,8 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.foundation.text.selection.SelectionContainer
+import com.halilibo.richtext.commonmark.Markdown
+import com.halilibo.richtext.ui.material3.RichText
 import com.oli.projectsai.data.db.entity.Message
 import com.oli.projectsai.data.db.entity.MessageRole
 import com.oli.projectsai.ui.components.TokenCounter
@@ -295,14 +297,17 @@ private fun MessageBubble(
             modifier = Modifier.fillMaxWidth(0.85f)
         ) {
             Column(modifier = Modifier.padding(12.dp)) {
-                Text(
-                    text = message.content,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = if (isUser)
-                        MaterialTheme.colorScheme.onPrimaryContainer
-                    else
-                        MaterialTheme.colorScheme.onSurfaceVariant
-                )
+                if (isUser) {
+                    Text(
+                        text = message.content,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onPrimaryContainer
+                    )
+                } else {
+                    RichText {
+                        Markdown(content = message.content)
+                    }
+                }
             }
         }
 
