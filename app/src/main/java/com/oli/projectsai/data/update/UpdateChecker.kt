@@ -2,7 +2,6 @@ package com.oli.projectsai.data.update
 
 import android.content.Context
 import android.util.Log
-import com.oli.projectsai.BuildConfig
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -35,9 +34,6 @@ class UpdateChecker @Inject constructor(
         val conn = (URL(API_URL).openConnection() as HttpURLConnection).apply {
             requestMethod = "GET"
             setRequestProperty("Accept", "application/vnd.github+json")
-            if (BuildConfig.GITHUB_TOKEN.isNotEmpty()) {
-                setRequestProperty("Authorization", "Bearer ${BuildConfig.GITHUB_TOKEN}")
-            }
             connectTimeout = TIMEOUT_MS
             readTimeout = TIMEOUT_MS
         }
