@@ -16,6 +16,8 @@ import com.oli.projectsai.inference.ChatMessage
 import com.oli.projectsai.inference.GenerationConfig
 import com.oli.projectsai.inference.InferenceError
 import com.oli.projectsai.inference.InferenceManager
+import com.oli.projectsai.inference.ModelState
+import com.oli.projectsai.inference.SummarisationPrompts
 import com.oli.projectsai.ui.components.TokenBreakdown
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -292,6 +294,25 @@ class ChatViewModel @Inject constructor(
             }
             "$role: ${msg.content}"
         }
+    }
+
+    val isModelLoaded: Boolean
+        get() = inferenceManager.modelState.value is ModelState.Loaded
+
+    /**
+     * Runs the loaded model over [conversation] with an add-to-memory prompt and returns the
+     * bullet-point summary. Throws [InferenceError] when the model isn't loaded or generation fails.
+     */
+    suspend fun autoSummariseForMemory(conversation: String): String {
+        if (inferenceManager.modelState.value !is ModelState.Loaded) throw InferenceError.ModelNotLoaded
+        val (system, user) = SummarisationPrompts.buildAddToMemoryPrompt(conversation)
+        val out = StringBuilder()
+        inferenceManager.generate(
+            systemPrompt = system,
+            messages = listOf(ChatMessage(role = "user", content = user)),
+            config = GenerationConfig()
+        ).collect { chunk -> out.append(chunk) }
+        return out.toString().trim()
     }
 
     fun addToMemory(summary: String) {

@@ -28,6 +28,8 @@ fun MemoryScreen(
     val memoryTokens by viewModel.memoryTokenCount.collectAsStateWithLifecycle()
     val pinnedMemories by viewModel.pinnedMemories.collectAsStateWithLifecycle()
     val isEditing by viewModel.isEditing.collectAsStateWithLifecycle()
+    val isCompressing by viewModel.isCompressing.collectAsStateWithLifecycle()
+    val compressError by viewModel.compressError.collectAsStateWithLifecycle()
 
     val p = project
     val tokenLimit = p?.memoryTokenLimit ?: 8000
@@ -197,19 +199,50 @@ fun MemoryScreen(
 
     if (showCompressDialog) {
         AlertDialog(
-            onDismissRequest = { showCompressDialog = false },
+            onDismissRequest = { if (!isCompressing) showCompressDialog = false },
             title = { Text("Compress Memory?") },
             text = {
-                Text("This will send the accumulated memory to the model to consolidate and compress it. Pinned items will be preserved.")
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("This will send the accumulated memory to the model to consolidate and compress it. Pinned items will be preserved.")
+                    if (!viewModel.isModelLoaded) {
+                        Text(
+                            "Load a model first to use compression.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error
+                        )
+                    }
+                    compressError?.let { err ->
+                        Text(
+                            err,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error
+                        )
+                    }
+                    if (isCompressing) {
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = androidx.compose.ui.Alignment.CenterVertically
+                        ) {
+                            CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                            Text("Compressing…", style = MaterialTheme.typography.bodySmall)
+                        }
+                    }
+                }
             },
             confirmButton = {
-                TextButton(onClick = {
-                    viewModel.compressMemory()
-                    showCompressDialog = false
-                }) { Text("Compress") }
+                TextButton(
+                    onClick = { viewModel.compressMemory() },
+                    enabled = !isCompressing && viewModel.isModelLoaded
+                ) { Text("Compress") }
             },
             dismissButton = {
-                TextButton(onClick = { showCompressDialog = false }) { Text("Cancel") }
+                TextButton(
+                    onClick = {
+                        viewModel.dismissCompressError()
+                        showCompressDialog = false
+                    },
+                    enabled = !isCompressing
+                ) { Text("Cancel") }
             }
         )
     }

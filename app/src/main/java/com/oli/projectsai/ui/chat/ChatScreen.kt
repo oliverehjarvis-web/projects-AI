@@ -221,7 +221,8 @@ fun ChatScreen(
     if (showMemoryDialog) {
         AddToMemoryDialog(
             conversationText = viewModel.getConversationForMemory(),
-            inferenceManager = null, // Will use the ViewModel's method
+            modelLoaded = viewModel.isModelLoaded,
+            autoSummarise = { conv -> viewModel.autoSummariseForMemory(conv) },
             onSave = { summary ->
                 viewModel.addToMemory(summary)
                 showMemoryDialog = false

@@ -5,7 +5,12 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.oli.projectsai.data.db.entity.Project
 import com.oli.projectsai.data.repository.ProjectRepository
+import com.oli.projectsai.inference.ChatMessage
+import com.oli.projectsai.inference.GenerationConfig
+import com.oli.projectsai.inference.InferenceError
 import com.oli.projectsai.inference.InferenceManager
+import com.oli.projectsai.inference.ModelState
+import com.oli.projectsai.inference.SummarisationPrompts
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
@@ -34,6 +39,15 @@ class MemoryViewModel @Inject constructor(
 
     private val _isEditing = MutableStateFlow(false)
     val isEditing: StateFlow<Boolean> = _isEditing.asStateFlow()
+
+    private val _isCompressing = MutableStateFlow(false)
+    val isCompressing: StateFlow<Boolean> = _isCompressing.asStateFlow()
+
+    private val _compressError = MutableStateFlow<String?>(null)
+    val compressError: StateFlow<String?> = _compressError.asStateFlow()
+
+    val isModelLoaded: Boolean
+        get() = inferenceManager.modelState.value is ModelState.Loaded
 
     init {
         viewModelScope.launch {
@@ -104,13 +118,50 @@ class MemoryViewModel @Inject constructor(
     }
 
     fun compressMemory() {
-        // In the full implementation, this would send the memory to the model
-        // with a compression prompt. For now, it's a placeholder.
+        if (_isCompressing.value) return
+        val existing = _memoryText.value
+        if (existing.isBlank()) return
+        val pinned = _pinnedMemories.value
+
+        _isCompressing.value = true
+        _compressError.value = null
+
         viewModelScope.launch {
-            // TODO: Send to model with prompt:
-            // "Compress and consolidate the following memory notes. Remove redundancy,
-            //  merge related items, and keep only facts, decisions, and actionable info.
-            //  Preserve all pinned items exactly as written."
+            try {
+                if (inferenceManager.modelState.value !is ModelState.Loaded) {
+                    throw InferenceError.ModelNotLoaded
+                }
+                val (system, user) = SummarisationPrompts.buildCompressPrompt(existing, pinned)
+                val out = StringBuilder()
+                inferenceManager.generate(
+                    systemPrompt = system,
+                    messages = listOf(ChatMessage(role = "user", content = user)),
+                    config = GenerationConfig()
+                ).collect { chunk -> out.append(chunk) }
+
+                val compressed = ensurePinnedPresent(out.toString().trim(), pinned)
+                if (compressed.isBlank()) {
+                    _compressError.value = "Model returned an empty response."
+                } else {
+                    projectRepository.updateMemory(projectId, compressed)
+                }
+            } catch (ie: InferenceError.ModelNotLoaded) {
+                _compressError.value = "Load a model before compressing memory."
+            } catch (t: Throwable) {
+                _compressError.value = t.message ?: "Compression failed"
+            } finally {
+                _isCompressing.value = false
+            }
         }
+    }
+
+    fun dismissCompressError() { _compressError.value = null }
+
+    private fun ensurePinnedPresent(output: String, pinned: List<String>): String {
+        if (pinned.isEmpty()) return output
+        val missing = pinned.filter { line -> line.isNotBlank() && line !in output }
+        if (missing.isEmpty()) return output
+        val separator = if (output.endsWith("\n\n---\n\n")) "" else "\n\n---\n\n"
+        return output + separator + missing.joinToString("\n")
     }
 }
