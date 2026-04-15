@@ -116,7 +116,8 @@ fun ProjectsAINavGraph(navController: NavHostController) {
 
         composable(Routes.TRANSCRIPTION) {
             TranscriptionScreen(
-                onNavigateBack = { navController.popBackStack() }
+                onNavigateBack = { navController.popBackStack() },
+                onNavigateToModelManagement = { navController.navigate(Routes.MODEL_MANAGEMENT) }
             )
         }
     }

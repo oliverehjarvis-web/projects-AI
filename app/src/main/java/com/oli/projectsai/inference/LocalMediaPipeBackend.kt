@@ -24,6 +24,8 @@ class LocalMediaPipeBackend @Inject constructor(
 
     companion object {
         private const val TAG = "LocalLiteRT"
+        private const val TRANSCRIBE_PROMPT =
+            "Transcribe the audio verbatim. Output only the transcript text, no commentary."
     }
 
     override val id: String = "local_mediapipe"
@@ -42,7 +44,8 @@ class LocalMediaPipeBackend @Inject constructor(
             try {
                 val engineConfig = EngineConfig(
                     modelPath = modelInfo.filePath,
-                    backend = Backend.CPU()
+                    backend = Backend.CPU(),
+                    audioBackend = Backend.CPU()
                 )
                 val e = Engine(engineConfig)
                 e.initialize()
@@ -114,6 +117,25 @@ class LocalMediaPipeBackend @Inject constructor(
             parts.add("Prior conversation:\n$history")
         }
         return parts.joinToString("\n\n")
+    }
+
+    override suspend fun transcribe(pcm16MonoBytes: ByteArray): String = withContext(Dispatchers.IO) {
+        val e = engine ?: throw IllegalStateException("Model not loaded")
+        require(pcm16MonoBytes.isNotEmpty()) { "Empty audio buffer" }
+
+        // Disposable conversation so no transcription state leaks into chat history.
+        e.createConversation(ConversationConfig()).use { conversation ->
+            val response = conversation.sendMessage(
+                Contents.of(
+                    Content.AudioBytes(pcm16MonoBytes),
+                    Content.Text(TRANSCRIBE_PROMPT)
+                )
+            )
+            response.contents.contents
+                .filterIsInstance<Content.Text>()
+                .joinToString("") { it.text }
+                .trim()
+        }
     }
 
     override suspend fun countTokens(text: String): Int {

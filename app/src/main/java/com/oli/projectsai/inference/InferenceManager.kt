@@ -66,6 +66,11 @@ class InferenceManager @Inject constructor(
         return backend.generate(systemPrompt, messages, config)
     }
 
+    suspend fun transcribe(pcm16MonoBytes: ByteArray): String {
+        val backend = getActiveBackend() ?: throw IllegalStateException("No model loaded")
+        return backend.transcribe(pcm16MonoBytes)
+    }
+
     suspend fun countTokens(text: String, backendId: String? = null): Int {
         val backend = if (backendId != null) {
             backends[backendId] ?: throw IllegalArgumentException("Unknown backend: $backendId")

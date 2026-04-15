@@ -4,82 +4,105 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
-import android.os.Bundle
-import android.speech.RecognitionListener
-import android.speech.RecognizerIntent
-import android.speech.SpeechRecognizer
 import androidx.lifecycle.ViewModel
+import androidx.lifecycle.viewModelScope
+import com.oli.projectsai.inference.AudioCapture
+import com.oli.projectsai.inference.InferenceManager
+import com.oli.projectsai.inference.ModelState
+import com.oli.projectsai.inference.TRANSCRIPTION_MAX_SECONDS
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
 import javax.inject.Inject
 
 @HiltViewModel
 class TranscriptionViewModel @Inject constructor(
-    @ApplicationContext private val context: Context
+    @ApplicationContext private val context: Context,
+    private val inferenceManager: InferenceManager,
+    private val audioCapture: AudioCapture
 ) : ViewModel() {
 
     sealed class RecordingState {
-        object Idle : RecordingState()
-        object Listening : RecordingState()
+        data object Idle : RecordingState()
+        data class Recording(val elapsedMs: Long) : RecordingState()
+        data object Transcribing : RecordingState()
         data class Done(val text: String) : RecordingState()
-        data class Error(val message: String) : RecordingState()
+        data class Error(val message: String, val needsModel: Boolean = false) : RecordingState()
     }
 
     private val _state = MutableStateFlow<RecordingState>(RecordingState.Idle)
     val state: StateFlow<RecordingState> = _state.asStateFlow()
 
-    private val _partialText = MutableStateFlow("")
-    val partialText: StateFlow<String> = _partialText.asStateFlow()
+    private var tickJob: Job? = null
+    private var startedAt: Long = 0L
 
-    private var recognizer: SpeechRecognizer? = null
-
-    // Must be called from the main thread (composable onClick)
-    fun startListening() {
-        _state.value = RecordingState.Listening
-        _partialText.value = ""
-        recognizer?.destroy()
-        recognizer = SpeechRecognizer.createSpeechRecognizer(context).apply {
-            setRecognitionListener(object : RecognitionListener {
-                override fun onPartialResults(partialResults: Bundle) {
-                    val partial = partialResults.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
-                    _partialText.value = partial?.firstOrNull() ?: ""
+    fun start() {
+        if (inferenceManager.modelState.value !is ModelState.Loaded) {
+            _state.value = RecordingState.Error(
+                "Load a model before transcribing.",
+                needsModel = true
+            )
+            return
+        }
+        try {
+            audioCapture.start()
+        } catch (t: Throwable) {
+            _state.value = RecordingState.Error(t.message ?: "Failed to start recording")
+            return
+        }
+        startedAt = System.currentTimeMillis()
+        _state.value = RecordingState.Recording(0L)
+        tickJob?.cancel()
+        tickJob = viewModelScope.launch {
+            while (audioCapture.isRecording) {
+                val elapsed = System.currentTimeMillis() - startedAt
+                _state.value = RecordingState.Recording(elapsed)
+                if (elapsed >= TRANSCRIPTION_MAX_SECONDS * 1000L) {
+                    stop()
+                    return@launch
                 }
-                override fun onResults(results: Bundle) {
-                    val text = results.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
-                        ?.firstOrNull() ?: ""
-                    _state.value = RecordingState.Done(text)
-                    _partialText.value = ""
-                }
-                override fun onError(error: Int) {
-                    _state.value = RecordingState.Error("Recognition error $error")
-                }
-                override fun onReadyForSpeech(params: Bundle) {}
-                override fun onBeginningOfSpeech() {}
-                override fun onRmsChanged(rmsdB: Float) {}
-                override fun onBufferReceived(buffer: ByteArray) {}
-                override fun onEndOfSpeech() {}
-                override fun onEvent(eventType: Int, params: Bundle) {}
-            })
-            startListening(Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
-                putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-                putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
-                putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
-            })
+                delay(250)
+            }
         }
     }
 
-    fun stopListening() {
-        recognizer?.stopListening()
+    fun stop() {
+        if (_state.value !is RecordingState.Recording) {
+            audioCapture.cancel()
+            return
+        }
+        tickJob?.cancel()
+        tickJob = null
+        val pcm = audioCapture.stop()
+        if (pcm.isEmpty()) {
+            _state.value = RecordingState.Error("No audio captured.")
+            return
+        }
+        _state.value = RecordingState.Transcribing
+        viewModelScope.launch {
+            try {
+                val text = inferenceManager.transcribe(pcm)
+                _state.value = if (text.isBlank()) {
+                    RecordingState.Error("Transcription was empty — try speaking closer to the mic.")
+                } else {
+                    RecordingState.Done(text)
+                }
+            } catch (t: Throwable) {
+                _state.value = RecordingState.Error(t.message ?: "Transcription failed")
+            }
+        }
     }
 
     fun reset() {
-        recognizer?.destroy()
-        recognizer = null
+        tickJob?.cancel()
+        tickJob = null
+        audioCapture.cancel()
         _state.value = RecordingState.Idle
-        _partialText.value = ""
     }
 
     fun copyToClipboard(text: String) {
@@ -99,7 +122,8 @@ class TranscriptionViewModel @Inject constructor(
     }
 
     override fun onCleared() {
-        recognizer?.destroy()
+        tickJob?.cancel()
+        audioCapture.cancel()
         super.onCleared()
     }
 }
