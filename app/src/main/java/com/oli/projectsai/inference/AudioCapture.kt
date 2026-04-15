@@ -65,13 +65,19 @@ class AudioCapture @Inject constructor() {
                 while (recording.get()) {
                     val read = ar.read(tmp, 0, tmp.size)
                     if (read > 0) {
-                        synchronized(buffer) {
+                        // Return true if the cap was hit so we can break outside the synchronized block.
+                        val capped = synchronized(buffer) {
                             val remaining = MAX_BYTES - buffer.size()
                             if (remaining <= 0) {
-                                recording.set(false)
-                                break
+                                true
+                            } else {
+                                buffer.write(tmp, 0, minOf(read, remaining))
+                                false
                             }
-                            buffer.write(tmp, 0, minOf(read, remaining))
+                        }
+                        if (capped) {
+                            recording.set(false)
+                            break
                         }
                     } else if (read < 0) {
                         Log.w(TAG, "AudioRecord.read returned $read")

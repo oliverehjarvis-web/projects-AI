@@ -27,8 +27,6 @@ class LocalMediaPipeBackend @Inject constructor(
         private const val TRANSCRIBE_PROMPT =
             "Transcribe the audio verbatim. Output only the transcript text, no commentary."
         private const val DEFAULT_CHARS_PER_TOKEN = 4.0f
-        private const val MIN_CHARS_PER_TOKEN = 2.0f
-        private const val MAX_CHARS_PER_TOKEN = 10.0f
     }
 
     override val id: String = "local_mediapipe"
@@ -105,11 +103,6 @@ class LocalMediaPipeBackend @Inject constructor(
                                 .joinToString("") { it.text }
                             if (chunk.isNotEmpty()) emit(chunk)
                         }
-
-                    calibrateFromBenchmark(
-                        conversation = conversation,
-                        prefillCharCount = fullContext.length + lastUserMessage.length
-                    )
                 }
             } catch (ie: InferenceError) {
                 throw ie
@@ -117,24 +110,6 @@ class LocalMediaPipeBackend @Inject constructor(
                 throw InferenceError.GenerationFailed(t)
             }
         }.flowOn(Dispatchers.IO)
-    }
-
-    private fun calibrateFromBenchmark(
-        conversation: com.google.ai.edge.litertlm.Conversation,
-        prefillCharCount: Int
-    ) {
-        try {
-            val info = conversation.benchmarkInfo
-            val tokens = info.lastPrefillTokenCount
-            if (tokens > 0 && prefillCharCount > 0) {
-                val ratio = (prefillCharCount.toFloat() / tokens.toFloat())
-                    .coerceIn(MIN_CHARS_PER_TOKEN, MAX_CHARS_PER_TOKEN)
-                charsPerToken = ratio
-                Log.i(TAG, "Calibrated tokenizer: ${"%.2f".format(ratio)} chars/token (prefill=$tokens)")
-            }
-        } catch (t: Throwable) {
-            Log.w(TAG, "Benchmark read failed; keeping previous ratio", t)
-        }
     }
 
     /**
