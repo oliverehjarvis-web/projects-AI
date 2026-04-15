@@ -71,6 +71,18 @@ class ChatViewModel @Inject constructor(
 
     init {
         viewModelScope.launch {
+            combine(
+                inferenceManager.tokenizerVersion,
+                inferenceManager.contextLimitFlow
+            ) { _, _ -> }.collect {
+                if (contextProjectId != -1L) {
+                    val p = projectRepository.getProject(contextProjectId)
+                    if (p != null) refreshContextTokenBreakdown(p.manualContext, p.accumulatedMemory)
+                }
+                updateTokenBreakdown()
+            }
+        }
+        viewModelScope.launch {
             if (chatId != -1L) {
                 // Existing chat
                 val chat = chatRepository.getChat(chatId)
@@ -108,7 +120,10 @@ class ChatViewModel @Inject constructor(
         }
     }
 
+    private var contextProjectId: Long = -1L
+
     private suspend fun loadProjectContext(pid: Long) {
+        contextProjectId = pid
         val project = projectRepository.getProject(pid) ?: return
         val contextParts = buildList {
             if (project.manualContext.isNotBlank()) add(project.manualContext)
@@ -117,12 +132,14 @@ class ChatViewModel @Inject constructor(
             }
         }
         systemPrompt = contextParts.joinToString("\n\n")
+        refreshContextTokenBreakdown(project.manualContext, project.accumulatedMemory)
+    }
 
-        val contextLimit = inferenceManager.getActiveBackend()?.loadedModel?.contextLength ?: 8192
-        _tokenBreakdown.value = TokenBreakdown(
-            systemPrompt = inferenceManager.countTokens(project.manualContext),
-            memory = inferenceManager.countTokens(project.accumulatedMemory),
-            contextLimit = contextLimit
+    private suspend fun refreshContextTokenBreakdown(manualContext: String, memory: String) {
+        _tokenBreakdown.value = _tokenBreakdown.value.copy(
+            systemPrompt = inferenceManager.countTokens(manualContext),
+            memory = inferenceManager.countTokens(memory),
+            contextLimit = inferenceManager.contextLimitFlow.value
         )
     }
 
@@ -240,8 +257,14 @@ class ChatViewModel @Inject constructor(
     }
 
     private suspend fun updateTokenBreakdown() {
-        val convTokens = _messages.value.sumOf { it.tokenCount }
-        _tokenBreakdown.value = _tokenBreakdown.value.copy(conversation = convTokens)
+        // Recompute conversation tokens live rather than summing stored snapshots — they can
+        // drift after a model swap because each model has a different tokenizer.
+        val joined = _messages.value.joinToString("\n") { it.content }
+        val convTokens = inferenceManager.countTokens(joined)
+        _tokenBreakdown.value = _tokenBreakdown.value.copy(
+            conversation = convTokens,
+            contextLimit = inferenceManager.contextLimitFlow.value
+        )
     }
 
     fun copyToClipboard(text: String) {

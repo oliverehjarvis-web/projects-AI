@@ -26,6 +26,9 @@ class LocalMediaPipeBackend @Inject constructor(
         private const val TAG = "LocalLiteRT"
         private const val TRANSCRIBE_PROMPT =
             "Transcribe the audio verbatim. Output only the transcript text, no commentary."
+        private const val DEFAULT_CHARS_PER_TOKEN = 4.0f
+        private const val MIN_CHARS_PER_TOKEN = 2.0f
+        private const val MAX_CHARS_PER_TOKEN = 10.0f
     }
 
     override val id: String = "local_mediapipe"
@@ -34,6 +37,12 @@ class LocalMediaPipeBackend @Inject constructor(
 
     private var engine: Engine? = null
     private var _loadedModel: ModelInfo? = null
+    /**
+     * Chars-per-token ratio used by [countTokens]. Initialised to 4.0 (typical for Gemma SentencePiece
+     * on English text) and refined opportunistically after each generate() using the real prefill token
+     * count reported by Conversation.benchmarkInfo. LiteRT-LM 0.10 does not expose a standalone tokenizer.
+     */
+    @Volatile private var charsPerToken: Float = DEFAULT_CHARS_PER_TOKEN
 
     override val isLoaded: Boolean get() = engine != null
     override val loadedModel: ModelInfo? get() = _loadedModel
@@ -51,6 +60,7 @@ class LocalMediaPipeBackend @Inject constructor(
                 e.initialize()
                 engine = e
                 _loadedModel = modelInfo
+                charsPerToken = DEFAULT_CHARS_PER_TOKEN
                 Log.i(TAG, "Model loaded: ${modelInfo.name}")
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to load model", e)
@@ -95,6 +105,11 @@ class LocalMediaPipeBackend @Inject constructor(
                                 .joinToString("") { it.text }
                             if (chunk.isNotEmpty()) emit(chunk)
                         }
+
+                    calibrateFromBenchmark(
+                        conversation = conversation,
+                        prefillCharCount = fullContext.length + lastUserMessage.length
+                    )
                 }
             } catch (ie: InferenceError) {
                 throw ie
@@ -102,6 +117,24 @@ class LocalMediaPipeBackend @Inject constructor(
                 throw InferenceError.GenerationFailed(t)
             }
         }.flowOn(Dispatchers.IO)
+    }
+
+    private fun calibrateFromBenchmark(
+        conversation: com.google.ai.edge.litertlm.Conversation,
+        prefillCharCount: Int
+    ) {
+        try {
+            val info = conversation.benchmarkInfo
+            val tokens = info.lastPrefillTokenCount
+            if (tokens > 0 && prefillCharCount > 0) {
+                val ratio = (prefillCharCount.toFloat() / tokens.toFloat())
+                    .coerceIn(MIN_CHARS_PER_TOKEN, MAX_CHARS_PER_TOKEN)
+                charsPerToken = ratio
+                Log.i(TAG, "Calibrated tokenizer: ${"%.2f".format(ratio)} chars/token (prefill=$tokens)")
+            }
+        } catch (t: Throwable) {
+            Log.w(TAG, "Benchmark read failed; keeping previous ratio", t)
+        }
     }
 
     /**
@@ -147,7 +180,8 @@ class LocalMediaPipeBackend @Inject constructor(
         }
     }
 
-    override suspend fun countTokens(text: String): Int {
-        return (text.length / 3.5).toInt().coerceAtLeast(1)
+    override suspend fun countTokens(text: String): Int = withContext(Dispatchers.Default) {
+        if (text.isEmpty()) 0
+        else (text.length / charsPerToken).toInt().coerceAtLeast(1)
     }
 }

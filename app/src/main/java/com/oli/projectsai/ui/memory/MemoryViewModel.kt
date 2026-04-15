@@ -40,7 +40,14 @@ class MemoryViewModel @Inject constructor(
             project.filterNotNull().collect { p ->
                 _memoryText.value = p.accumulatedMemory
                 _pinnedMemories.value = p.pinnedMemories
-                _memoryTokenCount.value = inferenceManager.countTokens(p.accumulatedMemory)
+            }
+        }
+        viewModelScope.launch {
+            combine(
+                _memoryText,
+                inferenceManager.tokenizerVersion
+            ) { text, _ -> text }.collect { text ->
+                _memoryTokenCount.value = inferenceManager.countTokens(text)
             }
         }
     }
@@ -49,9 +56,6 @@ class MemoryViewModel @Inject constructor(
 
     fun updateMemoryText(text: String) {
         _memoryText.value = text
-        viewModelScope.launch {
-            _memoryTokenCount.value = inferenceManager.countTokens(text)
-        }
     }
 
     fun saveMemory() {

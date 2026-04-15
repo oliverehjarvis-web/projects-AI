@@ -41,10 +41,11 @@ class ProjectViewModel @Inject constructor(
 
     init {
         viewModelScope.launch {
-            project.filterNotNull().collect { p ->
-                _contextTokenCount.value = inferenceManager.countTokens(p.manualContext)
-                _memoryTokenCount.value = inferenceManager.countTokens(p.accumulatedMemory)
-            }
+            combine(project.filterNotNull(), inferenceManager.tokenizerVersion) { p, _ -> p }
+                .collect { p ->
+                    _contextTokenCount.value = inferenceManager.countTokens(p.manualContext)
+                    _memoryTokenCount.value = inferenceManager.countTokens(p.accumulatedMemory)
+                }
         }
     }
 

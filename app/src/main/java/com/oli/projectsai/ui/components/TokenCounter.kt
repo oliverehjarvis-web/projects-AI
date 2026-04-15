@@ -2,6 +2,7 @@ package com.oli.projectsai.ui.components
 
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.Canvas
+import androidx.compose.runtime.Immutable
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -15,6 +16,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import com.oli.projectsai.ui.theme.*
 
+@Immutable
 data class TokenBreakdown(
     val systemPrompt: Int = 0,
     val memory: Int = 0,

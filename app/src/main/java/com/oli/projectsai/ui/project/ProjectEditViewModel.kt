@@ -10,6 +10,7 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
@@ -51,9 +52,14 @@ class ProjectEditViewModel @Inject constructor(
                     _description.value = p.description
                     _manualContext.value = p.manualContext
                     _memoryTokenLimit.value = p.memoryTokenLimit
-                    updateTokenCount(p.manualContext)
                 }
             }
+        }
+        viewModelScope.launch {
+            combine(_manualContext, inferenceManager.tokenizerVersion) { text, _ -> text }
+                .collect { text ->
+                    _contextTokenCount.value = inferenceManager.countTokens(text)
+                }
         }
     }
 
@@ -62,15 +68,10 @@ class ProjectEditViewModel @Inject constructor(
 
     fun updateManualContext(value: String) {
         _manualContext.value = value
-        viewModelScope.launch { updateTokenCount(value) }
     }
 
     fun updateMemoryTokenLimit(value: Int) {
         _memoryTokenLimit.value = value.coerceIn(1000, 32000)
-    }
-
-    private suspend fun updateTokenCount(text: String) {
-        _contextTokenCount.value = inferenceManager.countTokens(text)
     }
 
     fun save() {

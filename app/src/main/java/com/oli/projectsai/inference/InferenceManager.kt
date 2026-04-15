@@ -4,8 +4,17 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.Dispatchers
 import javax.inject.Inject
 import javax.inject.Singleton
+
+/** Default Gemma 4 E4B context window. Overridden per-model when known. */
+const val DEFAULT_CONTEXT_LENGTH = 8192
 
 sealed class ModelState {
     data object Unloaded : ModelState()
@@ -21,6 +30,19 @@ class InferenceManager @Inject constructor(
 ) {
     private val _modelState = MutableStateFlow<ModelState>(ModelState.Unloaded)
     val modelState: StateFlow<ModelState> = _modelState.asStateFlow()
+
+    /**
+     * Bumps every time a model is successfully loaded. UI code uses this to invalidate
+     * cached token counts — after a model swap the calibrated tokenizer ratio changes.
+     */
+    private val _tokenizerVersion = MutableStateFlow(0L)
+    val tokenizerVersion: StateFlow<Long> = _tokenizerVersion.asStateFlow()
+
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+
+    val contextLimitFlow: StateFlow<Int> = _modelState
+        .map { (it as? ModelState.Loaded)?.modelInfo?.contextLength ?: DEFAULT_CONTEXT_LENGTH }
+        .stateIn(scope, SharingStarted.Eagerly, DEFAULT_CONTEXT_LENGTH)
 
     private val backends: Map<String, InferenceBackend> = mapOf(
         localBackend.id to localBackend
@@ -41,6 +63,7 @@ class InferenceManager @Inject constructor(
         try {
             backend.loadModel(modelInfo)
             _modelState.value = ModelState.Loaded(modelInfo)
+            _tokenizerVersion.value = _tokenizerVersion.value + 1
         } catch (ie: InferenceError) {
             _modelState.value = ModelState.Error(ie.message ?: "Failed to load model")
             throw ie
