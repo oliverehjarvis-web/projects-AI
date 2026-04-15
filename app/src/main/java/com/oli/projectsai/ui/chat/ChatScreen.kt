@@ -18,6 +18,7 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.compose.foundation.text.selection.SelectionContainer
 import com.oli.projectsai.data.db.entity.Message
 import com.oli.projectsai.data.db.entity.MessageRole
 import com.oli.projectsai.ui.components.TokenCounter
@@ -36,9 +37,12 @@ fun ChatScreen(
     val error by viewModel.error.collectAsStateWithLifecycle()
     val chatTitle by viewModel.chatTitle.collectAsStateWithLifecycle()
 
+    val systemContext by viewModel.systemContext.collectAsStateWithLifecycle()
+
     var inputText by remember { mutableStateOf("") }
     var showTokenDetail by remember { mutableStateOf(false) }
     var showMemoryDialog by remember { mutableStateOf(false) }
+    var showContextDialog by remember { mutableStateOf(false) }
     val listState = rememberLazyListState()
 
     // Auto-scroll to bottom on new messages
@@ -60,6 +64,9 @@ fun ChatScreen(
                     }
                 },
                 actions = {
+                    IconButton(onClick = { showContextDialog = true }) {
+                        Icon(Icons.Default.Info, "View Context")
+                    }
                     IconButton(onClick = { showMemoryDialog = true }) {
                         Icon(Icons.Default.Psychology, "Add to Memory")
                     }
@@ -186,6 +193,24 @@ fun ChatScreen(
                 }
             }
         }
+    }
+
+    if (showContextDialog) {
+        AlertDialog(
+            onDismissRequest = { showContextDialog = false },
+            title = { Text("Active Context") },
+            text = {
+                val text = if (systemContext.isBlank())
+                    "(No context — project has no manual context or memory)"
+                else systemContext
+                SelectionContainer {
+                    Text(text, style = MaterialTheme.typography.bodySmall)
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showContextDialog = false }) { Text("Close") }
+            }
+        )
     }
 
     if (showMemoryDialog) {

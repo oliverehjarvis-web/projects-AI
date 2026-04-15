@@ -37,7 +37,12 @@ class ChatViewModel @Inject constructor(
     private val quickActionId: Long = savedStateHandle.get<Long>("quickActionId") ?: -1L
 
     private var activeChatId: Long = chatId
-    private var systemPrompt = ""
+
+    private val _systemContext = MutableStateFlow("")
+    val systemContext: StateFlow<String> = _systemContext.asStateFlow()
+    private var systemPrompt: String
+        get() = _systemContext.value
+        set(value) { _systemContext.value = value }
 
     private val _messages = MutableStateFlow<List<Message>>(emptyList())
     val messages: StateFlow<List<Message>> = _messages.asStateFlow()

@@ -13,6 +13,7 @@ import com.oli.projectsai.ui.project.ProjectDetailScreen
 import com.oli.projectsai.ui.project.ProjectEditScreen
 import com.oli.projectsai.ui.settings.ModelManagementScreen
 import com.oli.projectsai.ui.settings.SettingsScreen
+import com.oli.projectsai.ui.transcription.TranscriptionScreen
 
 object Routes {
     const val HOME = "home"
@@ -23,6 +24,7 @@ object Routes {
     const val MEMORY = "memory/{projectId}"
     const val SETTINGS = "settings"
     const val MODEL_MANAGEMENT = "settings/model"
+    const val TRANSCRIPTION = "transcription"
 
     fun projectDetail(projectId: Long) = "project/$projectId"
     fun projectEdit(projectId: Long? = null) = "project/edit?projectId=${projectId ?: -1}"
@@ -40,7 +42,8 @@ fun ProjectsAINavGraph(navController: NavHostController) {
                 onProjectClick = { navController.navigate(Routes.projectDetail(it)) },
                 onNewProject = { navController.navigate(Routes.projectEdit()) },
                 onNewChat = { projectId -> navController.navigate(Routes.newChat(projectId)) },
-                onSettingsClick = { navController.navigate(Routes.SETTINGS) }
+                onSettingsClick = { navController.navigate(Routes.SETTINGS) },
+                onTranscribeClick = { navController.navigate(Routes.TRANSCRIPTION) }
             )
         }
 
@@ -107,6 +110,12 @@ fun ProjectsAINavGraph(navController: NavHostController) {
 
         composable(Routes.MODEL_MANAGEMENT) {
             ModelManagementScreen(
+                onNavigateBack = { navController.popBackStack() }
+            )
+        }
+
+        composable(Routes.TRANSCRIPTION) {
+            TranscriptionScreen(
                 onNavigateBack = { navController.popBackStack() }
             )
         }

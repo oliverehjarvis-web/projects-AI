@@ -80,19 +80,20 @@ class LocalMediaPipeBackend @Inject constructor(
         val conversationConfig = ConversationConfig(systemInstruction = systemInstruction)
 
         return flow {
-            val conversation = e.createConversation(conversationConfig)
-            val lastUserMessage = messages.lastOrNull { it.role == "user" }?.content
-                ?: throw IllegalArgumentException("No user message to respond to")
+            e.createConversation(conversationConfig).use { conversation ->
+                val lastUserMessage = messages.lastOrNull { it.role == "user" }?.content
+                    ?: throw IllegalArgumentException("No user message to respond to")
 
-            // sendMessageAsync streams incremental tokens as Flow<Message>.
-            // Text is extracted from the Content.Text items in each message's contents list.
-            conversation.sendMessageAsync(lastUserMessage)
-                .collect { message ->
-                    val chunk = message.contents.contents
-                        .filterIsInstance<Content.Text>()
-                        .joinToString("") { it.text }
-                    if (chunk.isNotEmpty()) emit(chunk)
-                }
+                // sendMessageAsync streams incremental tokens as Flow<Message>.
+                // Text is extracted from the Content.Text items in each message's contents list.
+                conversation.sendMessageAsync(lastUserMessage)
+                    .collect { message ->
+                        val chunk = message.contents.contents
+                            .filterIsInstance<Content.Text>()
+                            .joinToString("") { it.text }
+                        if (chunk.isNotEmpty()) emit(chunk)
+                    }
+            }
         }.flowOn(Dispatchers.IO)
     }
 
