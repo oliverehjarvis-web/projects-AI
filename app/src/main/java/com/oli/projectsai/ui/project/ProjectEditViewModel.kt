@@ -35,7 +35,7 @@ class ProjectEditViewModel @Inject constructor(
     private val _manualContext = MutableStateFlow("")
     val manualContext: StateFlow<String> = _manualContext.asStateFlow()
 
-    private val _memoryTokenLimit = MutableStateFlow(8000)
+    private val _memoryTokenLimit = MutableStateFlow(4000)
     val memoryTokenLimit: StateFlow<Int> = _memoryTokenLimit.asStateFlow()
 
     private val _contextTokenCount = MutableStateFlow(0)

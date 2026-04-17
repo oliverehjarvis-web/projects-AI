@@ -32,7 +32,7 @@ fun MemoryScreen(
     val compressError by viewModel.compressError.collectAsStateWithLifecycle()
 
     val p = project
-    val tokenLimit = p?.memoryTokenLimit ?: 8000
+    val tokenLimit = p?.memoryTokenLimit ?: 4000
     val isOverLimit = memoryTokens > tokenLimit
     val usagePercent = if (tokenLimit > 0) memoryTokens.toFloat() / tokenLimit else 0f
 

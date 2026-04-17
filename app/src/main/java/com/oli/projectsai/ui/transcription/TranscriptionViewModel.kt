@@ -1,15 +1,14 @@
 package com.oli.projectsai.ui.transcription
 
-import android.content.ClipData
-import android.content.ClipboardManager
 import android.content.Context
-import android.content.Intent
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.oli.projectsai.inference.AudioCapture
 import com.oli.projectsai.inference.InferenceManager
 import com.oli.projectsai.inference.ModelState
 import com.oli.projectsai.inference.TRANSCRIPTION_MAX_SECONDS
+import com.oli.projectsai.ui.common.copyToClipboard
+import com.oli.projectsai.ui.common.shareText
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Job
@@ -105,21 +104,9 @@ class TranscriptionViewModel @Inject constructor(
         _state.value = RecordingState.Idle
     }
 
-    fun copyToClipboard(text: String) {
-        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-        clipboard.setPrimaryClip(ClipData.newPlainText("Transcript", text))
-    }
+    fun copyToClipboard(text: String) = context.copyToClipboard(text, label = "Transcript")
 
-    fun shareText(text: String) {
-        val intent = Intent(Intent.ACTION_SEND).apply {
-            type = "text/plain"
-            putExtra(Intent.EXTRA_TEXT, text)
-            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        }
-        context.startActivity(Intent.createChooser(intent, "Share transcript").apply {
-            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        })
-    }
+    fun shareText(text: String) = context.shareText(text, chooserTitle = "Share transcript")
 
     override fun onCleared() {
         tickJob?.cancel()

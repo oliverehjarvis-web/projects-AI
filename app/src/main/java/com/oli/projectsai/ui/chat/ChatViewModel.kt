@@ -1,9 +1,6 @@
 package com.oli.projectsai.ui.chat
 
-import android.content.ClipData
-import android.content.ClipboardManager
 import android.content.Context
-import android.content.Intent
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -18,9 +15,12 @@ import com.oli.projectsai.inference.InferenceError
 import com.oli.projectsai.inference.InferenceManager
 import com.oli.projectsai.inference.ModelState
 import com.oli.projectsai.inference.SummarisationPrompts
+import com.oli.projectsai.ui.common.copyToClipboard
+import com.oli.projectsai.ui.common.shareText
 import com.oli.projectsai.ui.components.TokenBreakdown
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
@@ -149,7 +149,7 @@ class ChatViewModel @Inject constructor(
         if (content.isBlank() || _isGenerating.value) return
 
         val trimmed = content.trim()
-        viewModelScope.launch {
+        generationJob = viewModelScope.launch {
             val persisted = try {
                 chatRepository.addMessage(
                     Message(
@@ -183,22 +183,21 @@ class ChatViewModel @Inject constructor(
         generationJob = viewModelScope.launch { generate(currentUserContent = content) }
     }
 
+    fun cancelGeneration() {
+        if (!_isGenerating.value) return
+        generationJob?.cancel(CancellationException("User cancelled generation"))
+    }
+
     private suspend fun generate(currentUserContent: String? = null) {
         _isGenerating.value = true
         _streamingContent.value = ""
         _error.value = null
 
         val fullResponse = StringBuilder()
+        var cancelled = false
         try {
             val dbMessages = _messages.value.map { msg ->
-                ChatMessage(
-                    role = when (msg.role) {
-                        MessageRole.USER -> "user"
-                        MessageRole.ASSISTANT -> "model"
-                        MessageRole.SYSTEM -> "system"
-                    },
-                    content = msg.content
-                )
+                ChatMessage(role = msg.role.toWireRole(), content = msg.content)
             }
             val chatMessages = if (currentUserContent != null &&
                 dbMessages.lastOrNull()?.content != currentUserContent) {
@@ -213,29 +212,13 @@ class ChatViewModel @Inject constructor(
                 config = GenerationConfig()
             )
 
-            responseFlow.collect { token ->
-                fullResponse.append(token)
-                _streamingContent.value = fullResponse.toString()
-            }
-
-            val responseText = fullResponse.toString()
-            if (responseText.isNotBlank()) {
-                lastFailedUserContent = null
-                try {
-                    chatRepository.addMessage(
-                        Message(
-                            chatId = activeChatId,
-                            role = MessageRole.ASSISTANT,
-                            content = responseText,
-                            tokenCount = inferenceManager.countTokens(responseText)
-                        )
-                    )
-                } catch (t: Throwable) {
-                    _error.value = ChatError(
-                        "Response generated but failed to save: ${t.message}",
-                        retryable = false
-                    )
+            try {
+                responseFlow.collect { token ->
+                    fullResponse.append(token)
+                    _streamingContent.value = fullResponse.toString()
                 }
+            } catch (ce: CancellationException) {
+                cancelled = true
             }
         } catch (ie: InferenceError) {
             lastFailedUserContent = currentUserContent
@@ -249,10 +232,28 @@ class ChatViewModel @Inject constructor(
                 is InferenceError.LoadFailed ->
                     ChatError(ie.message ?: "Generation failed.", retryable = true)
             }
+        } catch (ce: CancellationException) {
+            cancelled = true
+            throw ce
         } catch (t: Throwable) {
             lastFailedUserContent = currentUserContent
             _error.value = ChatError(t.message ?: "Generation failed.", retryable = true)
         } finally {
+            val responseText = fullResponse.toString()
+            if (responseText.isNotBlank()) {
+                lastFailedUserContent = null
+                // Persist even on cancel so the user's partial answer isn't lost.
+                runCatching {
+                    chatRepository.addMessage(
+                        Message(
+                            chatId = activeChatId,
+                            role = MessageRole.ASSISTANT,
+                            content = if (cancelled) "$responseText _(stopped)_" else responseText,
+                            tokenCount = inferenceManager.countTokens(responseText)
+                        )
+                    )
+                }
+            }
             _isGenerating.value = false
             _streamingContent.value = ""
         }
@@ -269,10 +270,7 @@ class ChatViewModel @Inject constructor(
         )
     }
 
-    fun copyToClipboard(text: String) {
-        val clipboard = appContext.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-        clipboard.setPrimaryClip(ClipData.newPlainText("Projects AI", text))
-    }
+    fun copyToClipboard(text: String) = appContext.copyToClipboard(text)
 
     fun shareConversation() {
         val text = messages.value.joinToString("\n\n") { msg ->
@@ -282,16 +280,7 @@ class ChatViewModel @Inject constructor(
         shareText(text)
     }
 
-    fun shareText(text: String) {
-        val intent = Intent(Intent.ACTION_SEND).apply {
-            type = "text/plain"
-            putExtra(Intent.EXTRA_TEXT, text)
-            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        }
-        appContext.startActivity(Intent.createChooser(intent, "Share via").apply {
-            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        })
-    }
+    fun shareText(text: String) = appContext.shareText(text)
 
     fun getConversationForMemory(): String {
         return _messages.value.joinToString("\n\n") { msg ->
@@ -338,4 +327,10 @@ class ChatViewModel @Inject constructor(
     }
 
     fun dismissError() { _error.value = null }
+}
+
+private fun MessageRole.toWireRole(): String = when (this) {
+    MessageRole.USER -> "user"
+    MessageRole.ASSISTANT -> "model"
+    MessageRole.SYSTEM -> "system"
 }

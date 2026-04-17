@@ -226,16 +226,27 @@ fun ChatScreen(
                             }
                         )
                     )
-                    FilledIconButton(
-                        onClick = {
-                            if (inputText.isNotBlank()) {
-                                viewModel.sendMessage(inputText)
-                                inputText = ""
-                            }
-                        },
-                        enabled = inputText.isNotBlank() && !isGenerating
-                    ) {
-                        Icon(Icons.AutoMirrored.Filled.Send, "Send")
+                    if (isGenerating) {
+                        FilledIconButton(
+                            onClick = { viewModel.cancelGeneration() },
+                            colors = IconButtonDefaults.filledIconButtonColors(
+                                containerColor = MaterialTheme.colorScheme.error
+                            )
+                        ) {
+                            Icon(Icons.Default.Stop, "Stop")
+                        }
+                    } else {
+                        FilledIconButton(
+                            onClick = {
+                                if (inputText.isNotBlank()) {
+                                    viewModel.sendMessage(inputText)
+                                    inputText = ""
+                                }
+                            },
+                            enabled = inputText.isNotBlank()
+                        ) {
+                            Icon(Icons.AutoMirrored.Filled.Send, "Send")
+                        }
                     }
                 }
             }
@@ -340,12 +351,13 @@ private fun StreamingBubble(content: String) {
             ),
             modifier = Modifier.fillMaxWidth(0.85f)
         ) {
-            Text(
-                text = content,
-                modifier = Modifier.padding(12.dp),
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
+            // Render streaming tokens as markdown so the layout doesn't visibly reflow
+            // when the final message replaces this bubble on completion.
+            Column(modifier = Modifier.padding(12.dp)) {
+                RichText {
+                    Markdown(content = content)
+                }
+            }
         }
     }
 }

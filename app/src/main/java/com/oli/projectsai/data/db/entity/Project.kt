@@ -15,7 +15,7 @@ data class Project(
     val accumulatedMemory: String = "",
     val pinnedMemories: List<String> = emptyList(),
     val preferredBackend: PreferredBackend = PreferredBackend.LOCAL,
-    val memoryTokenLimit: Int = 8000,
+    val memoryTokenLimit: Int = 4000,
     val createdAt: Long = System.currentTimeMillis(),
     val updatedAt: Long = System.currentTimeMillis()
 )

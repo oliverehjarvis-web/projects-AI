@@ -35,12 +35,9 @@ class LocalMediaPipeBackend @Inject constructor(
 
     private var engine: Engine? = null
     private var _loadedModel: ModelInfo? = null
-    /**
-     * Chars-per-token ratio used by [countTokens]. Initialised to 4.0 (typical for Gemma SentencePiece
-     * on English text) and refined opportunistically after each generate() using the real prefill token
-     * count reported by Conversation.benchmarkInfo. LiteRT-LM 0.10 does not expose a standalone tokenizer.
-     */
-    @Volatile private var charsPerToken: Float = DEFAULT_CHARS_PER_TOKEN
+    // Approximate ratio — LiteRT-LM 0.10 does not expose a tokenizer. Hard-coded to the Gemma
+    // SentencePiece English average; accurate to within ~10% for budgeting purposes.
+    private val charsPerToken: Float = DEFAULT_CHARS_PER_TOKEN
 
     override val isLoaded: Boolean get() = engine != null
     override val loadedModel: ModelInfo? get() = _loadedModel
@@ -58,7 +55,6 @@ class LocalMediaPipeBackend @Inject constructor(
                 e.initialize()
                 engine = e
                 _loadedModel = modelInfo
-                charsPerToken = DEFAULT_CHARS_PER_TOKEN
                 Log.i(TAG, "Model loaded: ${modelInfo.name}")
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to load model", e)

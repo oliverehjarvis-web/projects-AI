@@ -88,16 +88,21 @@ class SettingsViewModel @Inject constructor(
         var lastProgressBytes = 0L
         var lastProgressAt = System.currentTimeMillis()
         while (true) {
-            val cursor = downloadManager.query(DownloadManager.Query().setFilterById(activeDownloadId))
-            if (cursor == null || !cursor.moveToFirst()) {
+            val snapshot = downloadManager.query(DownloadManager.Query().setFilterById(activeDownloadId))
+                ?.use { c ->
+                    if (c.moveToFirst()) {
+                        Triple(
+                            c.getInt(c.getColumnIndexOrThrow(DownloadManager.COLUMN_STATUS)),
+                            c.getLong(c.getColumnIndexOrThrow(DownloadManager.COLUMN_BYTES_DOWNLOADED_SO_FAR)),
+                            c.getLong(c.getColumnIndexOrThrow(DownloadManager.COLUMN_TOTAL_SIZE_BYTES))
+                        )
+                    } else null
+                }
+            if (snapshot == null) {
                 _updateState.value = UpdateState.Error("Download lost")
-                cursor?.close()
                 return
             }
-            val status = cursor.getInt(cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_STATUS))
-            val downloaded = cursor.getLong(cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_BYTES_DOWNLOADED_SO_FAR))
-            val total = cursor.getLong(cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_TOTAL_SIZE_BYTES))
-            cursor.close()
+            val (status, downloaded, total) = snapshot
 
             when (status) {
                 DownloadManager.STATUS_SUCCESSFUL -> {

@@ -93,17 +93,28 @@ class AudioCapture @Inject constructor() {
     /** Stops the capture and returns the PCM bytes collected so far. Safe to call even if not started. */
     fun stop(): ByteArray {
         if (!recording.getAndSet(false)) return ByteArray(0)
-        thread?.join(500)
+        // Stop the AudioRecord first so any blocking ar.read() in the capture thread returns
+        // promptly and the join below doesn't time out.
+        record?.runCatching { stop() }
+        val t = thread
         thread = null
-        record?.run {
-            try { stop() } catch (_: Throwable) {}
-            release()
+        try {
+            t?.join(2_000)
+            if (t?.isAlive == true) {
+                Log.w(TAG, "Capture thread did not exit within 2s; interrupting")
+                t.interrupt()
+            }
+        } catch (ie: InterruptedException) {
+            Thread.currentThread().interrupt()
         }
+        record?.runCatching { release() }
         record = null
         return synchronized(buffer) { buffer.toByteArray() }
     }
 
+    /** Discards any captured audio and tears down the recorder. */
     fun cancel() {
         stop()
+        synchronized(buffer) { buffer.reset() }
     }
 }

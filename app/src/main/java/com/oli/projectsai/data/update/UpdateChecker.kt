@@ -42,29 +42,23 @@ class UpdateChecker @Inject constructor(
             if (code != HttpURLConnection.HTTP_OK) {
                 throw Exception("GitHub API returned HTTP $code")
             }
-            val body = conn.inputStream.bufferedReader().readText()
+            val body = conn.inputStream.use { it.bufferedReader().readText() }
             val json = JSONObject(body)
-            val tagName = json.getString("tag_name")            // e.g. "v1.1.2"
-            val remoteVersion = tagName.trimStart('v')           // e.g. "1.1.2"
+            val tagName = json.getString("tag_name")
+            val remoteVersion = tagName.trimStart('v')
 
             if (!isNewer(remoteVersion, currentVersion)) {
                 Log.d(TAG, "Already up to date ($currentVersion)")
                 return@withContext null
             }
 
-            // Find APK asset
             val assets = json.getJSONArray("assets")
-            var downloadUrl: String? = null
-            for (i in 0 until assets.length()) {
-                val asset = assets.getJSONObject(i)
-                if (asset.getString("name").endsWith(".apk")) {
-                    downloadUrl = asset.getString("browser_download_url")
-                    break
-                }
-            }
-            if (downloadUrl == null) {
-                throw Exception("No APK asset found in release $tagName")
-            }
+            val downloadUrl = (0 until assets.length())
+                .asSequence()
+                .map { assets.getJSONObject(it) }
+                .firstOrNull { it.getString("name").endsWith(".apk") }
+                ?.getString("browser_download_url")
+                ?: throw Exception("No APK asset found in release $tagName")
 
             Log.i(TAG, "Update available: $remoteVersion (current: $currentVersion)")
             UpdateInfo(tagName = tagName, downloadUrl = downloadUrl, version = remoteVersion)
