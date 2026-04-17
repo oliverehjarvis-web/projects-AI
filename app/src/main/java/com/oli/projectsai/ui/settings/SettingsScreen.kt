@@ -22,6 +22,7 @@ import com.oli.projectsai.inference.ModelState
 fun SettingsScreen(
     onNavigateBack: () -> Unit,
     onModelManagement: () -> Unit,
+    onGlobalContext: () -> Unit,
     viewModel: SettingsViewModel = hiltViewModel()
 ) {
     val modelState by viewModel.modelState.collectAsStateWithLifecycle()
@@ -75,6 +76,21 @@ fun SettingsScreen(
                 },
                 leadingContent = { Icon(Icons.Default.Memory, null) },
                 modifier = Modifier.clickable(onClick = onModelManagement)
+            )
+
+            HorizontalDivider()
+
+            Text(
+                "Assistant",
+                style = MaterialTheme.typography.titleSmall,
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)
+            )
+
+            ListItem(
+                headlineContent = { Text("Global context") },
+                supportingContent = { Text("Your name and rules the assistant follows in every project.") },
+                leadingContent = { Icon(Icons.Default.Person, null) },
+                modifier = Modifier.clickable(onClick = onGlobalContext)
             )
 
             HorizontalDivider()

@@ -7,6 +7,7 @@ import androidx.lifecycle.viewModelScope
 import com.oli.projectsai.data.db.entity.Chat
 import com.oli.projectsai.data.db.entity.Message
 import com.oli.projectsai.data.db.entity.MessageRole
+import com.oli.projectsai.data.preferences.GlobalContextStore
 import com.oli.projectsai.data.repository.ChatRepository
 import com.oli.projectsai.data.repository.ProjectRepository
 import com.oli.projectsai.inference.ChatMessage
@@ -32,6 +33,7 @@ class ChatViewModel @Inject constructor(
     private val chatRepository: ChatRepository,
     private val projectRepository: ProjectRepository,
     private val inferenceManager: InferenceManager,
+    private val globalContextStore: GlobalContextStore,
     @ApplicationContext private val appContext: Context
 ) : ViewModel() {
 
@@ -75,11 +77,16 @@ class ChatViewModel @Inject constructor(
         viewModelScope.launch {
             combine(
                 inferenceManager.tokenizerVersion,
-                inferenceManager.contextLimitFlow
-            ) { _, _ -> }.collect {
+                inferenceManager.contextLimitFlow,
+                globalContextStore.name,
+                globalContextStore.rules
+            ) { _, _, name, rules -> name to rules }.collect { (name, rules) ->
                 if (contextProjectId != -1L) {
                     val p = projectRepository.getProject(contextProjectId)
-                    if (p != null) refreshContextTokenBreakdown(p.manualContext, p.accumulatedMemory)
+                    if (p != null) {
+                        systemPrompt = buildSystemPrompt(name, rules, p.manualContext, p.accumulatedMemory)
+                        refreshContextTokenBreakdown(name, rules, p.manualContext, p.accumulatedMemory)
+                    }
                 }
                 updateTokenBreakdown()
             }
@@ -127,22 +134,48 @@ class ChatViewModel @Inject constructor(
     private suspend fun loadProjectContext(pid: Long) {
         contextProjectId = pid
         val project = projectRepository.getProject(pid) ?: return
-        val contextParts = buildList {
-            if (project.manualContext.isNotBlank()) add(project.manualContext)
-            if (project.accumulatedMemory.isNotBlank()) {
-                add("## Accumulated Memory\n${project.accumulatedMemory}")
-            }
-        }
-        systemPrompt = contextParts.joinToString("\n\n")
-        refreshContextTokenBreakdown(project.manualContext, project.accumulatedMemory)
+        val name = globalContextStore.name.first()
+        val rules = globalContextStore.rules.first()
+        systemPrompt = buildSystemPrompt(name, rules, project.manualContext, project.accumulatedMemory)
+        refreshContextTokenBreakdown(name, rules, project.manualContext, project.accumulatedMemory)
     }
 
-    private suspend fun refreshContextTokenBreakdown(manualContext: String, memory: String) {
+    private fun buildSystemPrompt(
+        name: String,
+        rules: String,
+        manualContext: String,
+        memory: String
+    ): String = buildList {
+        val globalBlock = buildGlobalBlock(name, rules)
+        if (globalBlock.isNotBlank()) add(globalBlock)
+        if (manualContext.isNotBlank()) add(manualContext)
+        if (memory.isNotBlank()) add("## Accumulated Memory\n$memory")
+    }.joinToString("\n\n")
+
+    private suspend fun refreshContextTokenBreakdown(
+        name: String,
+        rules: String,
+        manualContext: String,
+        memory: String
+    ) {
+        val systemText = listOfNotNull(
+            buildGlobalBlock(name, rules).ifBlank { null },
+            manualContext.ifBlank { null }
+        ).joinToString("\n\n")
         _tokenBreakdown.value = _tokenBreakdown.value.copy(
-            systemPrompt = inferenceManager.countTokens(manualContext),
+            systemPrompt = inferenceManager.countTokens(systemText),
             memory = inferenceManager.countTokens(memory),
             contextLimit = inferenceManager.contextLimitFlow.value
         )
+    }
+
+    private fun buildGlobalBlock(name: String, rules: String): String {
+        val parts = mutableListOf<String>()
+        if (name.isNotBlank()) parts.add("You are speaking with ${name.trim()}.")
+        if (rules.isNotBlank()) {
+            parts.add("Follow these rules in every response:\n${rules.trim()}")
+        }
+        return parts.joinToString("\n\n")
     }
 
     fun sendMessage(content: String) {

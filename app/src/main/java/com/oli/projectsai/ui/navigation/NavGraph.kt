@@ -11,6 +11,7 @@ import com.oli.projectsai.ui.home.HomeScreen
 import com.oli.projectsai.ui.memory.MemoryScreen
 import com.oli.projectsai.ui.project.ProjectDetailScreen
 import com.oli.projectsai.ui.project.ProjectEditScreen
+import com.oli.projectsai.ui.settings.GlobalContextScreen
 import com.oli.projectsai.ui.settings.ModelManagementScreen
 import com.oli.projectsai.ui.settings.SettingsScreen
 import com.oli.projectsai.ui.transcription.TranscriptionScreen
@@ -24,6 +25,7 @@ object Routes {
     const val MEMORY = "memory/{projectId}"
     const val SETTINGS = "settings"
     const val MODEL_MANAGEMENT = "settings/model"
+    const val GLOBAL_CONTEXT = "settings/global-context"
     const val TRANSCRIPTION = "transcription"
 
     fun projectDetail(projectId: Long) = "project/$projectId"
@@ -104,12 +106,19 @@ fun ProjectsAINavGraph(navController: NavHostController) {
         composable(Routes.SETTINGS) {
             SettingsScreen(
                 onNavigateBack = { navController.popBackStack() },
-                onModelManagement = { navController.navigate(Routes.MODEL_MANAGEMENT) }
+                onModelManagement = { navController.navigate(Routes.MODEL_MANAGEMENT) },
+                onGlobalContext = { navController.navigate(Routes.GLOBAL_CONTEXT) }
             )
         }
 
         composable(Routes.MODEL_MANAGEMENT) {
             ModelManagementScreen(
+                onNavigateBack = { navController.popBackStack() }
+            )
+        }
+
+        composable(Routes.GLOBAL_CONTEXT) {
+            GlobalContextScreen(
                 onNavigateBack = { navController.popBackStack() }
             )
         }
