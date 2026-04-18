@@ -28,7 +28,7 @@ data class ModelInfo(
     val name: String,
     val precision: ModelPrecision,
     val filePath: String,
-    val contextLength: Int = 8192
+    val contextLength: Int = 16384
 )
 
 /** 16 kHz mono PCM 16-bit samples; Gemma 4 audio input is capped at this duration. */
