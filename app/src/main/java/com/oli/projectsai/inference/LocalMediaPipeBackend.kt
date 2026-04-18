@@ -45,39 +45,27 @@ class LocalMediaPipeBackend @Inject constructor(
     override suspend fun loadModel(modelInfo: ModelInfo) {
         withContext(Dispatchers.IO) {
             unloadModel()
-            val e = tryInit(modelInfo, Backend.GPU())
-                ?: tryInit(modelInfo, Backend.CPU())
-                ?: run {
-                    engine = null
-                    _loadedModel = null
-                    throw InferenceError.LoadFailed(
-                        IllegalStateException("Could not initialise engine on GPU or CPU")
-                    )
-                }
-            engine = e
+            // CPU only: LiteRT-LM 0.10's GPU backend lazy-loads OpenCL at generation time,
+            // and OnePlus devices don't expose libOpenCL.so at the path LiteRT expects — the
+            // load-time init succeeds but the first generate call dies with "cannot find opencl
+            // library". CPU on an 8 Gen 4 is plenty fast for 4B Q4.
+            val engineConfig = EngineConfig(
+                modelPath = modelInfo.filePath,
+                backend = Backend.CPU(),
+                audioBackend = Backend.CPU(),
+                visionBackend = Backend.CPU(),
+                maxNumTokens = modelInfo.contextLength,
+                cacheDir = null
+            )
+            engine = try {
+                Engine(engineConfig).also { it.initialize() }
+            } catch (t: Throwable) {
+                Log.e(TAG, "Engine init failed: ${t.message}")
+                throw InferenceError.LoadFailed(t)
+            }
             _loadedModel = modelInfo
-            Log.i(TAG, "Model loaded: ${modelInfo.name}")
+            Log.i(TAG, "Model loaded (CPU): ${modelInfo.name}")
         }
-    }
-
-    /**
-     * Attempts engine init on [backend]. Returns the initialised engine or null on failure so the
-     * caller can fall back to another backend. Vision and audio kernels stay on CPU because the
-     * GPU path in LiteRT-LM 0.10 doesn't cover every multimodal op on all drivers.
-     */
-    private fun tryInit(modelInfo: ModelInfo, backend: Backend): Engine? = try {
-        val engineConfig = EngineConfig(
-            modelPath = modelInfo.filePath,
-            backend = backend,
-            audioBackend = Backend.CPU(),
-            visionBackend = Backend.CPU(),
-            maxNumTokens = modelInfo.contextLength,
-            cacheDir = null
-        )
-        Engine(engineConfig).also { it.initialize() }
-    } catch (t: Throwable) {
-        Log.w(TAG, "Engine init failed on ${backend::class.simpleName}: ${t.message}")
-        null
     }
 
     override suspend fun unloadModel() {
