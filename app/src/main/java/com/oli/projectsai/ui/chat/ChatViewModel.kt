@@ -323,9 +323,11 @@ class ChatViewModel @Inject constructor(
             }
 
             val searchEnabled = _webSearchEnabled.value
-            val effectiveSystemPrompt = if (searchEnabled) {
-                systemPrompt + "\n\n" + SEARCH_TOOL_INSTRUCTIONS
-            } else systemPrompt
+            val effectiveSystemPrompt = buildList {
+                add(currentTemporalContext())
+                if (systemPrompt.isNotBlank()) add(systemPrompt)
+                if (searchEnabled) add(SEARCH_TOOL_INSTRUCTIONS)
+            }.joinToString("\n\n")
 
             val firstBuf = StringBuilder()
             try {
@@ -579,6 +581,13 @@ private fun MessageRole.toWireRole(): String = when (this) {
     MessageRole.USER -> "user"
     MessageRole.ASSISTANT -> "model"
     MessageRole.SYSTEM -> "system"
+}
+
+private fun currentTemporalContext(): String {
+    val now = java.time.ZonedDateTime.now()
+    val date = now.format(java.time.format.DateTimeFormatter.ofPattern("EEEE, d MMMM yyyy"))
+    val time = now.format(java.time.format.DateTimeFormatter.ofPattern("HH:mm"))
+    return "Current context:\n- Date: $date\n- Time: $time\n- Timezone: ${now.zone.id}"
 }
 
 private val SEARCH_TAG_REGEX = Regex("<search>(.*?)</search>", RegexOption.DOT_MATCHES_ALL)
