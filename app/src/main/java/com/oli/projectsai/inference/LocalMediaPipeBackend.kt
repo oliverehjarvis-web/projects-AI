@@ -45,56 +45,26 @@ class LocalMediaPipeBackend @Inject constructor(
     override suspend fun loadModel(modelInfo: ModelInfo) {
         withContext(Dispatchers.IO) {
             unloadModel()
-            // LiteRT-LM 0.10 lazy-loads OpenCL at first generation, so init succeeding doesn't
-            // mean GPU actually works — we have to force a dummy inference to confirm. If it
-            // fails (e.g. OnePlus doesn't expose libOpenCL.so where LiteRT looks), fall back
-            // to CPU cleanly.
-            val gpuEngine = tryInit(modelInfo, Backend.GPU())
-            if (gpuEngine != null && warmUp(gpuEngine)) {
-                engine = gpuEngine
-                _loadedModel = modelInfo
-                Log.i(TAG, "Model loaded (GPU): ${modelInfo.name}")
-                return@withContext
+            // CPU-only: OnePlus devices don't expose libOpenCL.so at the path LiteRT-LM 0.10
+            // searches, and even the warm-up probe hard-crashes natively before the fallback
+            // can kick in. An 8 Gen 4 on CPU is fast enough for 4B Q4 in practice.
+            val engineConfig = EngineConfig(
+                modelPath = modelInfo.filePath,
+                backend = Backend.CPU(),
+                audioBackend = Backend.CPU(),
+                visionBackend = Backend.CPU(),
+                maxNumTokens = modelInfo.contextLength,
+                cacheDir = null
+            )
+            engine = try {
+                Engine(engineConfig).also { it.initialize() }
+            } catch (t: Throwable) {
+                Log.e(TAG, "Engine init failed: ${t.message}")
+                throw InferenceError.LoadFailed(t)
             }
-            gpuEngine?.runCatching { close() }
-
-            val cpuEngine = tryInit(modelInfo, Backend.CPU())
-                ?: throw InferenceError.LoadFailed(
-                    IllegalStateException("Could not initialise engine on CPU")
-                )
-            engine = cpuEngine
             _loadedModel = modelInfo
             Log.i(TAG, "Model loaded (CPU): ${modelInfo.name}")
         }
-    }
-
-    private fun tryInit(modelInfo: ModelInfo, backend: Backend): Engine? = try {
-        val engineConfig = EngineConfig(
-            modelPath = modelInfo.filePath,
-            backend = backend,
-            audioBackend = Backend.CPU(),
-            visionBackend = Backend.CPU(),
-            maxNumTokens = modelInfo.contextLength,
-            cacheDir = null
-        )
-        Engine(engineConfig).also { it.initialize() }
-    } catch (t: Throwable) {
-        Log.w(TAG, "Engine init failed on ${backend::class.simpleName}: ${t.message}")
-        null
-    }
-
-    /**
-     * Runs a throwaway inference to force any lazy-loaded native libs (e.g. OpenCL for the
-     * GPU backend) to surface now rather than at the user's first real message.
-     */
-    private fun warmUp(candidate: Engine): Boolean = try {
-        candidate.createConversation(ConversationConfig()).use { conv ->
-            conv.sendMessage(Contents.of(Content.Text("Hi")))
-        }
-        true
-    } catch (t: Throwable) {
-        Log.w(TAG, "GPU warm-up failed, falling back: ${t.message}")
-        false
     }
 
     override suspend fun unloadModel() {
