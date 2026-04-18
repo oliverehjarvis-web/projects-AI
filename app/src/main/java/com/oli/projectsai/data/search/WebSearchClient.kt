@@ -12,8 +12,8 @@ import javax.inject.Inject
 import javax.inject.Singleton
 
 /**
- * Calls the Brave Search API with the user's key (stored locally). Returns snippet-sized results
- * that the model can consume without blowing the context budget.
+ * Calls a user-hosted SearXNG instance over its JSON API. The base URL is stored locally (e.g.
+ * a Tailscale address) so nothing machine-specific lives in the repo. Unlimited, no API key.
  */
 @Singleton
 class WebSearchClient @Inject constructor(
@@ -21,27 +21,27 @@ class WebSearchClient @Inject constructor(
 ) {
     data class Result(val title: String, val url: String, val snippet: String)
 
-    class MissingApiKey : Exception("Brave API key is not configured in Settings.")
+    class MissingEndpoint : Exception("SearXNG URL is not configured in Settings.")
 
     suspend fun search(query: String, count: Int = 5): List<Result> = withContext(Dispatchers.IO) {
-        val key = searchSettings.braveApiKey.first()
-        if (key.isBlank()) throw MissingApiKey()
+        val base = searchSettings.searxngUrl.first()
+        if (base.isBlank()) throw MissingEndpoint()
 
         val encoded = URLEncoder.encode(query, "UTF-8")
-        val endpoint = "https://api.search.brave.com/res/v1/web/search?q=$encoded&count=$count"
+        val endpoint = "$base/search?q=$encoded&format=json&safesearch=1"
         val conn = (URL(endpoint).openConnection() as HttpURLConnection).apply {
             connectTimeout = 10_000
             readTimeout = 15_000
             requestMethod = "GET"
             setRequestProperty("Accept", "application/json")
             setRequestProperty("Accept-Encoding", "identity")
-            setRequestProperty("X-Subscription-Token", key)
+            setRequestProperty("User-Agent", "ProjectsAI/1.0")
         }
         try {
             val code = conn.responseCode
             if (code !in 200..299) {
                 val body = conn.errorStream?.bufferedReader()?.use { it.readText() }.orEmpty()
-                throw Exception("Brave search failed (HTTP $code): ${body.take(200)}")
+                throw Exception("SearXNG request failed (HTTP $code): ${body.take(200)}")
             }
             val body = conn.inputStream.bufferedReader().use { it.readText() }
             parseResults(body, count)
@@ -52,16 +52,20 @@ class WebSearchClient @Inject constructor(
 
     private fun parseResults(body: String, count: Int): List<Result> {
         val json = JSONObject(body)
-        val web = json.optJSONObject("web") ?: return emptyList()
-        val arr = web.optJSONArray("results") ?: return emptyList()
+        val arr = json.optJSONArray("results") ?: return emptyList()
         val results = mutableListOf<Result>()
-        for (i in 0 until minOf(arr.length(), count)) {
-            val item = arr.optJSONObject(i) ?: continue
+        var i = 0
+        while (i < arr.length() && results.size < count) {
+            val item = arr.optJSONObject(i)
+            i++
+            if (item == null) continue
+            val url = item.optString("url")
+            if (url.isBlank()) continue
             results.add(
                 Result(
-                    title = item.optString("title").ifBlank { item.optString("url") },
-                    url = item.optString("url"),
-                    snippet = item.optString("description").trim()
+                    title = item.optString("title").ifBlank { url },
+                    url = url,
+                    snippet = item.optString("content").trim()
                 )
             )
         }

@@ -53,12 +53,12 @@ class SettingsViewModel @Inject constructor(
         inferenceManager.getAvailableBackends()
     )
 
-    val braveApiKey: StateFlow<String> = searchSettings.braveApiKey.stateIn(
+    val searxngUrl: StateFlow<String> = searchSettings.searxngUrl.stateIn(
         viewModelScope, SharingStarted.Eagerly, ""
     )
 
-    fun setBraveApiKey(value: String) {
-        viewModelScope.launch { searchSettings.setBraveApiKey(value) }
+    fun setSearxngUrl(value: String) {
+        viewModelScope.launch { searchSettings.setSearxngUrl(value) }
     }
 
     private val _updateState = MutableStateFlow<UpdateState>(UpdateState.Idle)

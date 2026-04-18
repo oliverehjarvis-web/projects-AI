@@ -28,7 +28,7 @@ fun SettingsScreen(
     val modelState by viewModel.modelState.collectAsStateWithLifecycle()
     val backends by viewModel.backends.collectAsStateWithLifecycle()
     val updateState by viewModel.updateState.collectAsStateWithLifecycle()
-    val braveApiKey by viewModel.braveApiKey.collectAsStateWithLifecycle()
+    val searxngUrl by viewModel.searxngUrl.collectAsStateWithLifecycle()
 
     // Auto-launch installer when APK is ready
     val currentUpdateState = updateState
@@ -102,9 +102,9 @@ fun SettingsScreen(
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)
             )
 
-            BraveApiKeyField(
-                currentKey = braveApiKey,
-                onSave = { viewModel.setBraveApiKey(it) }
+            SearxngUrlField(
+                currentUrl = searxngUrl,
+                onSave = { viewModel.setSearxngUrl(it) }
             )
 
             HorizontalDivider()
@@ -293,12 +293,11 @@ private fun UpdateSection(
 }
 
 @Composable
-private fun BraveApiKeyField(
-    currentKey: String,
+private fun SearxngUrlField(
+    currentUrl: String,
     onSave: (String) -> Unit
 ) {
-    var draft by remember(currentKey) { mutableStateOf(currentKey) }
-    var reveal by remember { mutableStateOf(false) }
+    var draft by remember(currentUrl) { mutableStateOf(currentUrl) }
 
     Column(
         modifier = Modifier
@@ -307,8 +306,9 @@ private fun BraveApiKeyField(
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
         Text(
-            "Paste your Brave Search API key to enable per-chat web search. " +
-                "Get a free key at api.search.brave.com.",
+            "Point at a SearXNG instance (e.g. running on your TrueNAS over Tailscale) to enable " +
+                "per-chat web search. Unlimited and no API key — include scheme and port, e.g. " +
+                "http://100.x.x.x:8888.",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
@@ -316,25 +316,15 @@ private fun BraveApiKeyField(
             value = draft,
             onValueChange = { draft = it },
             modifier = Modifier.fillMaxWidth(),
-            placeholder = { Text("BSA…") },
-            singleLine = true,
-            visualTransformation = if (reveal) androidx.compose.ui.text.input.VisualTransformation.None
-            else androidx.compose.ui.text.input.PasswordVisualTransformation(),
-            trailingIcon = {
-                IconButton(onClick = { reveal = !reveal }) {
-                    Icon(
-                        if (reveal) Icons.Default.VisibilityOff else Icons.Default.Visibility,
-                        if (reveal) "Hide" else "Show"
-                    )
-                }
-            }
+            placeholder = { Text("http://100.x.x.x:8888") },
+            singleLine = true
         )
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Button(
                 onClick = { onSave(draft) },
-                enabled = draft != currentKey
+                enabled = draft != currentUrl
             ) { Text("Save") }
-            if (currentKey.isNotEmpty()) {
+            if (currentUrl.isNotEmpty()) {
                 OutlinedButton(onClick = {
                     draft = ""
                     onSave("")

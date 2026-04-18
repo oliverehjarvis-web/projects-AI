@@ -17,8 +17,8 @@ private val Context.searchSettingsDataStore: DataStore<Preferences> by preferenc
 )
 
 /**
- * Local-only storage for the Brave Search API key. Kept out of the repository so the key never
- * ships in the APK; the user pastes it in Settings.
+ * Local-only storage for the SearXNG base URL (e.g. a Tailscale address). Kept out of the
+ * repository so machine-specific endpoints never ship in the APK; the user types it in Settings.
  */
 @Singleton
 class SearchSettings @Inject constructor(
@@ -26,13 +26,13 @@ class SearchSettings @Inject constructor(
 ) {
     private val store = context.searchSettingsDataStore
 
-    val braveApiKey: Flow<String> = store.data.map { it[KEY_BRAVE].orEmpty() }
+    val searxngUrl: Flow<String> = store.data.map { it[KEY_SEARXNG_URL].orEmpty() }
 
-    suspend fun setBraveApiKey(value: String) {
-        store.edit { it[KEY_BRAVE] = value.trim() }
+    suspend fun setSearxngUrl(value: String) {
+        store.edit { it[KEY_SEARXNG_URL] = value.trim().trimEnd('/') }
     }
 
     private companion object {
-        val KEY_BRAVE = stringPreferencesKey("brave_api_key")
+        val KEY_SEARXNG_URL = stringPreferencesKey("searxng_url")
     }
 }
