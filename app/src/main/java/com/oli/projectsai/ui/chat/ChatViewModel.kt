@@ -10,8 +10,11 @@ import com.oli.projectsai.data.db.entity.Chat
 import com.oli.projectsai.data.db.entity.Message
 import com.oli.projectsai.data.db.entity.MessageRole
 import com.oli.projectsai.data.preferences.GlobalContextStore
+import com.oli.projectsai.data.preferences.SearchDepth
+import com.oli.projectsai.data.preferences.SearchSettings
 import com.oli.projectsai.data.repository.ChatRepository
 import com.oli.projectsai.data.repository.ProjectRepository
+import com.oli.projectsai.data.search.PageFetcher
 import com.oli.projectsai.data.search.WebSearchClient
 import com.oli.projectsai.inference.AudioCapture
 import com.oli.projectsai.inference.ChatMessage
@@ -43,6 +46,8 @@ class ChatViewModel @Inject constructor(
     private val attachmentStore: AttachmentStore,
     private val audioCapture: AudioCapture,
     private val webSearchClient: WebSearchClient,
+    private val pageFetcher: PageFetcher,
+    private val searchSettings: SearchSettings,
     @ApplicationContext private val appContext: Context
 ) : ViewModel() {
 
@@ -323,70 +328,34 @@ class ChatViewModel @Inject constructor(
             }
 
             val searchEnabled = _webSearchEnabled.value
+            val depth = if (searchEnabled) searchSettings.searchDepth.first() else SearchDepth.AUTO_FETCH
+            val toolInstructions = when {
+                !searchEnabled -> ""
+                depth == SearchDepth.TOOL_LOOP -> TOOL_LOOP_INSTRUCTIONS
+                else -> AUTO_FETCH_INSTRUCTIONS
+            }
             val effectiveSystemPrompt = buildList {
                 add(currentTemporalContext())
                 if (systemPrompt.isNotBlank()) add(systemPrompt)
-                if (searchEnabled) add(SEARCH_TOOL_INSTRUCTIONS)
+                if (toolInstructions.isNotBlank()) add(toolInstructions)
             }.joinToString("\n\n")
 
-            val firstBuf = StringBuilder()
-            try {
-                inferenceManager.generate(
-                    systemPrompt = effectiveSystemPrompt,
-                    messages = chatMessages,
-                    config = GenerationConfig()
-                ).collect { token ->
-                    firstBuf.append(token)
-                    _streamingContent.value = if (searchEnabled) {
-                        stripAfterSearchOpen(firstBuf.toString())
-                    } else {
-                        firstBuf.toString()
-                    }
-                }
-            } catch (ce: CancellationException) {
-                cancelled = true
-            }
-
-            val firstText = firstBuf.toString()
-            val searchMatch = if (searchEnabled && !cancelled) {
-                SEARCH_TAG_REGEX.find(firstText)
-            } else null
-
-            if (searchMatch != null) {
-                val query = searchMatch.groupValues[1].trim()
-                _searchStatus.value = "Searching: $query"
-                val resultsText = try {
-                    val results = webSearchClient.search(query)
-                    WebSearchClient.formatForPrompt(query, results)
-                } catch (t: Throwable) {
-                    "Search failed: ${t.message ?: "unknown error"}"
-                } finally {
-                    _searchStatus.value = null
-                }
-
-                val continuationMessages = chatMessages + listOf(
-                    ChatMessage(role = "model", content = "<search>$query</search>"),
-                    ChatMessage(
-                        role = "user",
-                        content = "Search results:\n\n$resultsText\n\n" +
-                            "Use these to answer my previous question. Do not call <search> again."
-                    )
+            cancelled = when (depth.takeIf { searchEnabled }) {
+                SearchDepth.TOOL_LOOP -> runToolLoop(
+                    chatMessages = chatMessages,
+                    systemPromptText = effectiveSystemPrompt,
+                    fullResponse = fullResponse
                 )
-                _streamingContent.value = ""
-                try {
-                    inferenceManager.generate(
-                        systemPrompt = effectiveSystemPrompt,
-                        messages = continuationMessages,
-                        config = GenerationConfig()
-                    ).collect { token ->
-                        fullResponse.append(token)
-                        _streamingContent.value = fullResponse.toString()
-                    }
-                } catch (ce: CancellationException) {
-                    cancelled = true
-                }
-            } else {
-                fullResponse.append(firstText)
+                SearchDepth.AUTO_FETCH -> runAutoFetch(
+                    chatMessages = chatMessages,
+                    systemPromptText = effectiveSystemPrompt,
+                    fullResponse = fullResponse
+                )
+                null -> runSingleTurn(
+                    chatMessages = chatMessages,
+                    systemPromptText = effectiveSystemPrompt,
+                    fullResponse = fullResponse
+                )
             }
         } catch (ie: InferenceError) {
             lastFailedUserContent = currentUserContent
@@ -575,6 +544,177 @@ class ChatViewModel @Inject constructor(
     }
 
     fun dismissError() { _error.value = null }
+
+    /** Straight single-turn generation with no tool support. Returns true if cancelled. */
+    private suspend fun runSingleTurn(
+        chatMessages: List<ChatMessage>,
+        systemPromptText: String,
+        fullResponse: StringBuilder
+    ): Boolean {
+        return try {
+            inferenceManager.generate(
+                systemPrompt = systemPromptText,
+                messages = chatMessages,
+                config = GenerationConfig()
+            ).collect { token ->
+                fullResponse.append(token)
+                _streamingContent.value = fullResponse.toString()
+            }
+            false
+        } catch (ce: CancellationException) { true }
+    }
+
+    /**
+     * Two-pass flow: first pass generates until we see a `<search>` tag, then we run the query
+     * AND auto-fetch the top result pages, and feed everything back for the final answer.
+     */
+    private suspend fun runAutoFetch(
+        chatMessages: List<ChatMessage>,
+        systemPromptText: String,
+        fullResponse: StringBuilder
+    ): Boolean {
+        val firstBuf = StringBuilder()
+        var cancelled = try {
+            inferenceManager.generate(
+                systemPrompt = systemPromptText,
+                messages = chatMessages,
+                config = GenerationConfig()
+            ).collect { token ->
+                firstBuf.append(token)
+                _streamingContent.value = stripToolTags(firstBuf.toString())
+            }
+            false
+        } catch (ce: CancellationException) { true }
+
+        val searchMatch = if (!cancelled) SEARCH_TAG_REGEX.find(firstBuf) else null
+        if (searchMatch == null) {
+            fullResponse.append(firstBuf)
+            return cancelled
+        }
+
+        val query = searchMatch.groupValues[1].trim()
+        _searchStatus.value = "Searching: $query"
+        val results = try {
+            webSearchClient.search(query, count = 5)
+        } catch (t: Throwable) {
+            _searchStatus.value = null
+            val msg = "Search failed: ${t.message ?: "unknown error"}"
+            fullResponse.append(msg)
+            _streamingContent.value = msg
+            return cancelled
+        }
+
+        val enriched = StringBuilder(WebSearchClient.formatForPrompt(query, results))
+        results.take(2).forEachIndexed { idx, r ->
+            _searchStatus.value = "Reading: ${r.title.take(40)}"
+            val page = pageFetcher.fetch(r.url, maxChars = 2000)
+            if (page.isNotBlank()) {
+                enriched.append("\n\n--- Page [${idx + 1}] ${r.title} (${r.url}) ---\n")
+                enriched.append(page)
+            }
+        }
+        _searchStatus.value = null
+
+        val continuation = chatMessages + listOf(
+            ChatMessage(role = "model", content = "<search>$query</search>"),
+            ChatMessage(
+                role = "user",
+                content = "$enriched\n\nUse these to answer my previous question. " +
+                    "Do not call <search> again."
+            )
+        )
+        _streamingContent.value = ""
+        cancelled = try {
+            inferenceManager.generate(
+                systemPrompt = systemPromptText,
+                messages = continuation,
+                config = GenerationConfig()
+            ).collect { token ->
+                fullResponse.append(token)
+                _streamingContent.value = fullResponse.toString()
+            }
+            cancelled
+        } catch (ce: CancellationException) { true }
+        return cancelled
+    }
+
+    /**
+     * Model-driven loop: the model can emit `<search>query</search>` or `<fetch>url</fetch>`.
+     * We run the tool, inject the result, and let it generate again. Capped so a confused model
+     * can't loop forever.
+     */
+    private suspend fun runToolLoop(
+        chatMessages: List<ChatMessage>,
+        systemPromptText: String,
+        fullResponse: StringBuilder
+    ): Boolean {
+        var conversation = chatMessages
+        repeat(TOOL_LOOP_MAX_ROUNDS) { round ->
+            val buf = StringBuilder()
+            val cancelled = try {
+                inferenceManager.generate(
+                    systemPrompt = systemPromptText,
+                    messages = conversation,
+                    config = GenerationConfig()
+                ).collect { token ->
+                    buf.append(token)
+                    _streamingContent.value = stripToolTags(buf.toString())
+                }
+                false
+            } catch (ce: CancellationException) { true }
+
+            if (cancelled) {
+                fullResponse.append(stripToolTags(buf.toString()))
+                return true
+            }
+
+            val text = buf.toString()
+            val searchMatch = SEARCH_TAG_REGEX.find(text)
+            val fetchMatch = FETCH_TAG_REGEX.find(text)
+            val firstTool = listOfNotNull(searchMatch, fetchMatch).minByOrNull { it.range.first }
+
+            if (firstTool == null) {
+                fullResponse.append(text)
+                return false
+            }
+
+            val isLastRound = round == TOOL_LOOP_MAX_ROUNDS - 1
+            val toolResultText = when (firstTool) {
+                searchMatch -> {
+                    val query = firstTool.groupValues[1].trim()
+                    _searchStatus.value = "Searching: $query"
+                    try {
+                        val results = webSearchClient.search(query)
+                        WebSearchClient.formatForPrompt(query, results)
+                    } catch (t: Throwable) {
+                        "Search failed: ${t.message ?: "unknown error"}"
+                    } finally {
+                        _searchStatus.value = null
+                    }
+                }
+                fetchMatch -> {
+                    val url = firstTool.groupValues[1].trim()
+                    _searchStatus.value = "Reading: ${url.take(50)}"
+                    val page = pageFetcher.fetch(url, maxChars = 3000)
+                    _searchStatus.value = null
+                    if (page.isBlank()) "Fetch for $url returned no readable content."
+                    else "Page content for $url:\n\n$page"
+                }
+                else -> ""
+            }
+
+            val closingHint = if (isLastRound)
+                "\n\nYou've used the maximum number of tool calls. Answer now without any more tags."
+            else ""
+
+            conversation = conversation + listOf(
+                ChatMessage(role = "model", content = firstTool.value),
+                ChatMessage(role = "user", content = toolResultText + closingHint)
+            )
+            _streamingContent.value = ""
+        }
+        return false
+    }
 }
 
 private fun MessageRole.toWireRole(): String = when (this) {
@@ -591,27 +731,48 @@ private fun currentTemporalContext(): String {
 }
 
 private val SEARCH_TAG_REGEX = Regex("<search>(.*?)</search>", RegexOption.DOT_MATCHES_ALL)
+private val FETCH_TAG_REGEX = Regex("<fetch>(.*?)</fetch>", RegexOption.DOT_MATCHES_ALL)
+private const val TOOL_LOOP_MAX_ROUNDS = 4
 
 /**
- * Hides a partial <search> tag from the user while it streams in. Once we know the full query
- * we'll run the search and stream the real answer, so showing the tag itself only confuses.
+ * Hides any partial tool tag from the stream. Once we have the full tag we'll run the tool
+ * and stream the real answer, so showing the raw tag only confuses the user.
  */
-private fun stripAfterSearchOpen(text: String): String {
-    val i = text.indexOf("<search>")
-    return if (i >= 0) text.substring(0, i) else text
+private fun stripToolTags(text: String): String {
+    val sIdx = text.indexOf("<search>")
+    val fIdx = text.indexOf("<fetch>")
+    val cut = listOf(sIdx, fIdx).filter { it >= 0 }.minOrNull() ?: return text
+    return text.substring(0, cut)
 }
 
-private val SEARCH_TOOL_INSTRUCTIONS = """
+private val AUTO_FETCH_INSTRUCTIONS = """
 You have access to a web search tool. When the user's question needs current or specific
 information you don't already know (news, dates, stats, recent events, specific facts),
 respond with exactly:
 
 <search>your concise search query</search>
 
-and nothing else on that turn. You will then receive search results and should give
-your final answer using them.
+and nothing else on that turn. You will receive search results AND the full text of the
+top pages, then give your final answer using them.
 
 If you can answer from what you already know, answer directly — do not use <search> tags
 in normal answers. Only use the tag when you would otherwise need to look something up.
+""".trimIndent()
+
+private val TOOL_LOOP_INSTRUCTIONS = """
+You have two tools:
+
+1. <search>your query</search> — runs a web search and returns snippet-style results.
+2. <fetch>https://example.com/page</fetch> — downloads a specific URL and returns its
+   main text (use this on a URL from a previous search result to read it in full).
+
+When you use a tool, emit exactly the tag and nothing else on that turn; you will then
+receive the tool output and can either call another tool or give your final answer. A
+typical pattern: search first, pick the best URL from the results, fetch it for detail,
+then answer.
+
+If you can answer from what you already know, answer directly — do not emit tool tags in
+normal answers. You have a limited number of tool calls per question, so use them only
+when you genuinely need fresh information.
 """.trimIndent()
 

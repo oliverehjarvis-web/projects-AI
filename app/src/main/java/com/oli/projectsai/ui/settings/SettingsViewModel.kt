@@ -7,6 +7,7 @@ import androidx.core.content.FileProvider
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.oli.projectsai.BuildConfig
+import com.oli.projectsai.data.preferences.SearchDepth
 import com.oli.projectsai.data.preferences.SearchSettings
 import com.oli.projectsai.data.update.UpdateChecker
 import com.oli.projectsai.data.update.UpdateInfo
@@ -57,8 +58,16 @@ class SettingsViewModel @Inject constructor(
         viewModelScope, SharingStarted.Eagerly, ""
     )
 
+    val searchDepth: StateFlow<SearchDepth> = searchSettings.searchDepth.stateIn(
+        viewModelScope, SharingStarted.Eagerly, SearchDepth.AUTO_FETCH
+    )
+
     fun setSearxngUrl(value: String) {
         viewModelScope.launch { searchSettings.setSearxngUrl(value) }
+    }
+
+    fun setSearchDepth(value: SearchDepth) {
+        viewModelScope.launch { searchSettings.setSearchDepth(value) }
     }
 
     private val _updateState = MutableStateFlow<UpdateState>(UpdateState.Idle)

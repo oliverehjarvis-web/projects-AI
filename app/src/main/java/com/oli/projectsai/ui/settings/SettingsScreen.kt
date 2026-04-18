@@ -15,6 +15,7 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.oli.projectsai.BuildConfig
+import com.oli.projectsai.data.preferences.SearchDepth
 import com.oli.projectsai.inference.ModelState
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -29,6 +30,7 @@ fun SettingsScreen(
     val backends by viewModel.backends.collectAsStateWithLifecycle()
     val updateState by viewModel.updateState.collectAsStateWithLifecycle()
     val searxngUrl by viewModel.searxngUrl.collectAsStateWithLifecycle()
+    val searchDepth by viewModel.searchDepth.collectAsStateWithLifecycle()
 
     // Auto-launch installer when APK is ready
     val currentUpdateState = updateState
@@ -105,6 +107,11 @@ fun SettingsScreen(
             SearxngUrlField(
                 currentUrl = searxngUrl,
                 onSave = { viewModel.setSearxngUrl(it) }
+            )
+
+            SearchDepthSelector(
+                current = searchDepth,
+                onSelect = { viewModel.setSearchDepth(it) }
             )
 
             HorizontalDivider()
@@ -330,6 +337,63 @@ private fun SearxngUrlField(
                     onSave("")
                 }) { Text("Clear") }
             }
+        }
+    }
+}
+
+@Composable
+private fun SearchDepthSelector(
+    current: SearchDepth,
+    onSelect: (SearchDepth) -> Unit
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 8.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp)
+    ) {
+        Text(
+            "Search depth",
+            style = MaterialTheme.typography.titleSmall
+        )
+        DepthOption(
+            selected = current == SearchDepth.AUTO_FETCH,
+            title = "Auto-fetch top results",
+            subtitle = "Runs search, then auto-downloads the top 2 pages. One extra round-trip; consistent.",
+            onClick = { onSelect(SearchDepth.AUTO_FETCH) }
+        )
+        DepthOption(
+            selected = current == SearchDepth.TOOL_LOOP,
+            title = "Model decides (fetch tool)",
+            subtitle = "Model can search, then pick specific URLs to read in full. Slower and can loop; more flexible.",
+            onClick = { onSelect(SearchDepth.TOOL_LOOP) }
+        )
+    }
+}
+
+@Composable
+private fun DepthOption(
+    selected: Boolean,
+    title: String,
+    subtitle: String,
+    onClick: () -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        RadioButton(selected = selected, onClick = onClick)
+        Spacer(Modifier.width(8.dp))
+        Column(Modifier.weight(1f)) {
+            Text(title, style = MaterialTheme.typography.bodyMedium)
+            Text(
+                subtitle,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
         }
     }
 }
