@@ -49,7 +49,8 @@ class LocalMediaPipeBackend @Inject constructor(
                 val engineConfig = EngineConfig(
                     modelPath = modelInfo.filePath,
                     backend = Backend.CPU(),
-                    audioBackend = Backend.CPU()
+                    audioBackend = Backend.CPU(),
+                    visionBackend = Backend.CPU()
                 )
                 val e = Engine(engineConfig)
                 e.initialize()
@@ -87,12 +88,17 @@ class LocalMediaPipeBackend @Inject constructor(
         return flow {
             try {
                 e.createConversation(conversationConfig).use { conversation ->
-                    val lastUserMessage = messages.lastOrNull { it.role == "user" }?.content
+                    val lastUser = messages.lastOrNull { it.role == "user" }
                         ?: throw InferenceError.GenerationFailed(
                             IllegalArgumentException("No user message to respond to")
                         )
 
-                    conversation.sendMessageAsync(lastUserMessage)
+                    val turnContents = buildList<Content> {
+                        lastUser.imageBytes.forEach { add(Content.ImageBytes(it)) }
+                        add(Content.Text(lastUser.content))
+                    }
+
+                    conversation.sendMessageAsync(Contents.of(*turnContents.toTypedArray()))
                         .collect { message ->
                             val chunk = message.contents.contents
                                 .filterIsInstance<Content.Text>()

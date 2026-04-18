@@ -14,11 +14,20 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import java.io.File
 import javax.inject.Inject
 
 data class ModelFile(val name: String, val path: String)
+
+data class RecommendedModel(
+    val displayName: String,
+    val url: String,
+    val filename: String,
+    val sizeLabel: String,
+    val description: String
+)
 
 sealed class DownloadState {
     data object Idle : DownloadState()
@@ -34,9 +43,24 @@ class ModelManagementViewModel @Inject constructor(
 ) : ViewModel() {
 
     companion object {
-        const val GEMMA4_URL = "https://huggingface.co/litert-community/gemma-4-E4B-it-litert-lm/resolve/main/gemma-4-E4B-it.litertlm"
-        const val GEMMA4_FILENAME = "gemma-4-E4B-it.litertlm"
         private const val STALL_TIMEOUT_MS = 60_000L
+
+        val RECOMMENDED = listOf(
+            RecommendedModel(
+                displayName = "Gemma 4 E4B",
+                url = "https://huggingface.co/litert-community/gemma-4-E4B-it-litert-lm/resolve/main/gemma-4-E4B-it.litertlm",
+                filename = "gemma-4-E4B-it.litertlm",
+                sizeLabel = "3.65 GB",
+                description = "Balanced quality — recommended default"
+            ),
+            RecommendedModel(
+                displayName = "Gemma 4 E2B",
+                url = "https://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm/resolve/main/gemma-4-E2B-it.litertlm",
+                filename = "gemma-4-E2B-it.litertlm",
+                sizeLabel = "1.9 GB",
+                description = "Faster, smaller — trade quality for speed"
+            )
+        )
     }
 
     val modelState: StateFlow<ModelState> = inferenceManager.modelState
@@ -47,20 +71,23 @@ class ModelManagementViewModel @Inject constructor(
     private val _loadError = MutableStateFlow<String?>(null)
     val loadError: StateFlow<String?> = _loadError.asStateFlow()
 
-    private val _downloadState = MutableStateFlow<DownloadState>(DownloadState.Idle)
-    val downloadState: StateFlow<DownloadState> = _downloadState.asStateFlow()
+    val recommendedModels: List<RecommendedModel> = RECOMMENDED
+
+    private val _downloadStates = MutableStateFlow<Map<String, DownloadState>>(emptyMap())
+    val downloadStates: StateFlow<Map<String, DownloadState>> = _downloadStates.asStateFlow()
 
     private val downloadManager = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
     private var activeDownloadId: Long = -1L
+    private var activeDownloadFilename: String? = null
 
     private val modelsDir: File
         get() = File(context.getExternalFilesDir(null), "models").also { it.mkdirs() }
 
     init {
         scanModelFiles()
-        // Reflect already-downloaded state on re-open
-        if (File(modelsDir, GEMMA4_FILENAME).exists()) {
-            _downloadState.value = DownloadState.Completed
+        _downloadStates.value = RECOMMENDED.associate { model ->
+            model.filename to if (File(modelsDir, model.filename).exists())
+                DownloadState.Completed else DownloadState.Idle
         }
     }
 
@@ -95,33 +122,65 @@ class ModelManagementViewModel @Inject constructor(
         }
     }
 
-    fun downloadGemma4() {
-        if (_downloadState.value is DownloadState.Downloading) return
-        val destFile = File(modelsDir, GEMMA4_FILENAME)
+    fun downloadRecommended(model: RecommendedModel) {
+        downloadFromUrl(model.url, model.filename)
+    }
+
+    /**
+     * Downloads a .litertlm from a user-provided URL into the models directory.
+     * The filename is derived from the URL's last path segment.
+     */
+    fun downloadCustomUrl(url: String): String? {
+        val trimmed = url.trim()
+        if (trimmed.isEmpty()) return "Enter a URL."
+        val parsed = runCatching { Uri.parse(trimmed) }.getOrNull()
+        if (parsed == null || parsed.scheme !in setOf("http", "https")) {
+            return "URL must start with http:// or https://"
+        }
+        val lastSegment = parsed.lastPathSegment ?: return "Can't derive filename from URL."
+        val filename = lastSegment.substringAfterLast('/').ifBlank { return "Can't derive filename from URL." }
+        if (!filename.endsWith(".litertlm") &&
+            !filename.endsWith(".task") &&
+            !filename.endsWith(".bin")
+        ) {
+            return "URL must end in .litertlm, .task, or .bin"
+        }
+        downloadFromUrl(trimmed, filename)
+        return null
+    }
+
+    private fun downloadFromUrl(url: String, filename: String) {
+        if (activeDownloadId != -1L) {
+            setDownloadState(filename, DownloadState.Failed("Another download is in progress."))
+            return
+        }
+        val destFile = File(modelsDir, filename)
         if (destFile.exists()) {
-            _downloadState.value = DownloadState.Completed
+            setDownloadState(filename, DownloadState.Completed)
             scanModelFiles()
             return
         }
 
-        val request = DownloadManager.Request(Uri.parse(GEMMA4_URL))
-            .setTitle("Gemma 4 E4B")
-            .setDescription("Downloading AI model (3.65 GB)...")
+        val request = DownloadManager.Request(Uri.parse(url))
+            .setTitle(filename)
+            .setDescription("Downloading $filename")
             .setDestinationUri(Uri.fromFile(destFile))
             .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE)
 
         activeDownloadId = downloadManager.enqueue(request)
-        _downloadState.value = DownloadState.Downloading(null)
-        viewModelScope.launch { pollDownloadProgress() }
+        activeDownloadFilename = filename
+        setDownloadState(filename, DownloadState.Downloading(null))
+        viewModelScope.launch { pollDownloadProgress(filename) }
     }
 
-    private suspend fun pollDownloadProgress() {
+    private suspend fun pollDownloadProgress(filename: String) {
         var lastProgressBytes = 0L
         var lastProgressAt = System.currentTimeMillis()
         while (true) {
             val cursor = downloadManager.query(DownloadManager.Query().setFilterById(activeDownloadId))
             if (cursor == null || !cursor.moveToFirst()) {
-                _downloadState.value = DownloadState.Failed("Download lost")
+                setDownloadState(filename, DownloadState.Failed("Download lost"))
+                clearActiveDownload()
                 cursor?.close()
                 return
             }
@@ -131,12 +190,14 @@ class ModelManagementViewModel @Inject constructor(
             cursor.close()
             when (status) {
                 DownloadManager.STATUS_SUCCESSFUL -> {
-                    _downloadState.value = DownloadState.Completed
+                    setDownloadState(filename, DownloadState.Completed)
+                    clearActiveDownload()
                     scanModelFiles()
                     return
                 }
                 DownloadManager.STATUS_FAILED -> {
-                    _downloadState.value = DownloadState.Failed("Download failed")
+                    setDownloadState(filename, DownloadState.Failed("Download failed"))
+                    clearActiveDownload()
                     return
                 }
                 else -> {
@@ -145,14 +206,18 @@ class ModelManagementViewModel @Inject constructor(
                         lastProgressAt = System.currentTimeMillis()
                     } else if (System.currentTimeMillis() - lastProgressAt > STALL_TIMEOUT_MS) {
                         downloadManager.remove(activeDownloadId)
-                        activeDownloadId = -1L
-                        _downloadState.value = DownloadState.Failed(
-                            "Download stalled — check your network and retry."
+                        clearActiveDownload()
+                        setDownloadState(
+                            filename,
+                            DownloadState.Failed("Download stalled — check your network and retry.")
                         )
                         return
                     }
-                    _downloadState.value = DownloadState.Downloading(
-                        if (total > 0) downloaded.toFloat() / total else null
+                    setDownloadState(
+                        filename,
+                        DownloadState.Downloading(
+                            if (total > 0) downloaded.toFloat() / total else null
+                        )
                     )
                 }
             }
@@ -160,12 +225,22 @@ class ModelManagementViewModel @Inject constructor(
         }
     }
 
-    fun cancelDownload() {
+    fun cancelActiveDownload() {
+        val filename = activeDownloadFilename ?: return
         if (activeDownloadId != -1L) {
             downloadManager.remove(activeDownloadId)
-            activeDownloadId = -1L
         }
-        _downloadState.value = DownloadState.Idle
+        clearActiveDownload()
+        setDownloadState(filename, DownloadState.Idle)
+    }
+
+    private fun clearActiveDownload() {
+        activeDownloadId = -1L
+        activeDownloadFilename = null
+    }
+
+    private fun setDownloadState(filename: String, state: DownloadState) {
+        _downloadStates.update { it + (filename to state) }
     }
 
     fun loadModel(path: String, name: String, precision: ModelPrecision) {

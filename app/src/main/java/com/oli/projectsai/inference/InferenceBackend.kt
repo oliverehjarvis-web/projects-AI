@@ -6,7 +6,9 @@ import kotlinx.coroutines.flow.Flow
 
 data class ChatMessage(
     val role: String, // "user", "model", "system"
-    val content: String
+    val content: String,
+    /** Raw image bytes attached to this turn (only honoured on the final user message). */
+    val imageBytes: List<ByteArray> = emptyList()
 )
 
 data class GenerationConfig(

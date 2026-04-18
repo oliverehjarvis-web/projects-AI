@@ -29,13 +29,16 @@ fun ModelManagementScreen(
     val modelState by viewModel.modelState.collectAsStateWithLifecycle()
     val modelFiles by viewModel.modelFiles.collectAsStateWithLifecycle()
     val loadError by viewModel.loadError.collectAsStateWithLifecycle()
-    val downloadState by viewModel.downloadState.collectAsStateWithLifecycle()
+    val downloadStates by viewModel.downloadStates.collectAsStateWithLifecycle()
 
     val filePickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument()
     ) { uri: Uri? ->
         uri?.let { viewModel.importModel(it) }
     }
+
+    var customUrl by remember { mutableStateOf("") }
+    var customUrlError by remember { mutableStateOf<String?>(null) }
 
     Scaffold(
         topBar = {
@@ -108,69 +111,47 @@ fun ModelManagementScreen(
 
             HorizontalDivider()
 
-            // Recommended model download
-            Text("Recommended Model", style = MaterialTheme.typography.titleSmall)
+            // Recommended models
+            Text("Recommended Models", style = MaterialTheme.typography.titleSmall)
 
-            Card(
-                colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.secondaryContainer
+            viewModel.recommendedModels.forEach { model ->
+                val state = downloadStates[model.filename] ?: DownloadState.Idle
+                RecommendedModelCard(
+                    model = model,
+                    state = state,
+                    onDownload = { viewModel.downloadRecommended(model) },
+                    onCancel = { viewModel.cancelActiveDownload() }
                 )
+            }
+
+            HorizontalDivider()
+
+            // Custom URL download
+            Text("Download from URL", style = MaterialTheme.typography.titleSmall)
+
+            OutlinedTextField(
+                value = customUrl,
+                onValueChange = {
+                    customUrl = it
+                    customUrlError = null
+                },
+                modifier = Modifier.fillMaxWidth(),
+                placeholder = { Text("https://…/model.litertlm") },
+                singleLine = true,
+                isError = customUrlError != null,
+                supportingText = customUrlError?.let { { Text(it) } }
+            )
+            Button(
+                onClick = {
+                    val err = viewModel.downloadCustomUrl(customUrl)
+                    if (err == null) customUrl = ""
+                    customUrlError = err
+                },
+                modifier = Modifier.fillMaxWidth()
             ) {
-                Column(
-                    modifier = Modifier.padding(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text("Gemma 4 E4B", style = MaterialTheme.typography.titleMedium)
-                            Text(
-                                "3.65 GB · Apache 2.0 · No login required",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.7f)
-                            )
-                        }
-                        Spacer(Modifier.width(8.dp))
-                        when (val state = downloadState) {
-                            is DownloadState.Idle -> {
-                                Button(onClick = { viewModel.downloadGemma4() }) { Text("Download") }
-                            }
-                            is DownloadState.Downloading -> {
-                                OutlinedButton(onClick = { viewModel.cancelDownload() }) { Text("Cancel") }
-                            }
-                            is DownloadState.Completed -> {
-                                Icon(
-                                    Icons.Default.CheckCircle,
-                                    contentDescription = "Downloaded",
-                                    tint = MaterialTheme.colorScheme.primary,
-                                    modifier = Modifier.size(32.dp)
-                                )
-                            }
-                            is DownloadState.Failed -> {
-                                Button(onClick = { viewModel.downloadGemma4() }) { Text("Retry") }
-                            }
-                        }
-                    }
-                    when (val state = downloadState) {
-                        is DownloadState.Downloading -> {
-                            if (state.progress != null) {
-                                LinearProgressIndicator(
-                                    progress = { state.progress },
-                                    modifier = Modifier.fillMaxWidth()
-                                )
-                            } else {
-                                LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
-                            }
-                        }
-                        is DownloadState.Failed -> {
-                            Text(
-                                "Error: ${state.message}",
-                                color = MaterialTheme.colorScheme.error,
-                                style = MaterialTheme.typography.bodySmall
-                            )
-                        }
-                        else -> {}
-                    }
-                }
+                Icon(Icons.Default.Download, null)
+                Spacer(Modifier.width(8.dp))
+                Text("Download")
             }
 
             HorizontalDivider()
@@ -196,7 +177,7 @@ fun ModelManagementScreen(
                         Text("No model files found")
                         Spacer(Modifier.height(4.dp))
                         Text(
-                            "Download Gemma 4 E4B above, or import a model file.",
+                            "Download a model above, or import a model file.",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -240,6 +221,76 @@ fun ModelManagementScreen(
                         style = MaterialTheme.typography.bodySmall
                     )
                 }
+            }
+        }
+    }
+}
+
+@Composable
+private fun RecommendedModelCard(
+    model: RecommendedModel,
+    state: DownloadState,
+    onDownload: () -> Unit,
+    onCancel: () -> Unit
+) {
+    Card(
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.secondaryContainer
+        )
+    ) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(model.displayName, style = MaterialTheme.typography.titleMedium)
+                    Text(
+                        "${model.sizeLabel} · ${model.description}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.7f)
+                    )
+                }
+                Spacer(Modifier.width(8.dp))
+                when (state) {
+                    is DownloadState.Idle -> {
+                        Button(onClick = onDownload) { Text("Download") }
+                    }
+                    is DownloadState.Downloading -> {
+                        OutlinedButton(onClick = onCancel) { Text("Cancel") }
+                    }
+                    is DownloadState.Completed -> {
+                        Icon(
+                            Icons.Default.CheckCircle,
+                            contentDescription = "Downloaded",
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(32.dp)
+                        )
+                    }
+                    is DownloadState.Failed -> {
+                        Button(onClick = onDownload) { Text("Retry") }
+                    }
+                }
+            }
+            when (state) {
+                is DownloadState.Downloading -> {
+                    if (state.progress != null) {
+                        LinearProgressIndicator(
+                            progress = { state.progress },
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    } else {
+                        LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                    }
+                }
+                is DownloadState.Failed -> {
+                    Text(
+                        "Error: ${state.message}",
+                        color = MaterialTheme.colorScheme.error,
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
+                else -> {}
             }
         }
     }

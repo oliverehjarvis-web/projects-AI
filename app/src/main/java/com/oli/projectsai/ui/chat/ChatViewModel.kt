@@ -1,24 +1,29 @@
 package com.oli.projectsai.ui.chat
 
 import android.content.Context
+import android.net.Uri
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.oli.projectsai.data.attachments.AttachmentStore
 import com.oli.projectsai.data.db.entity.Chat
 import com.oli.projectsai.data.db.entity.Message
 import com.oli.projectsai.data.db.entity.MessageRole
 import com.oli.projectsai.data.preferences.GlobalContextStore
 import com.oli.projectsai.data.repository.ChatRepository
 import com.oli.projectsai.data.repository.ProjectRepository
+import com.oli.projectsai.inference.AudioCapture
 import com.oli.projectsai.inference.ChatMessage
 import com.oli.projectsai.inference.GenerationConfig
 import com.oli.projectsai.inference.InferenceError
 import com.oli.projectsai.inference.InferenceManager
 import com.oli.projectsai.inference.ModelState
 import com.oli.projectsai.inference.SummarisationPrompts
+import com.oli.projectsai.inference.TRANSCRIPTION_MAX_SECONDS
 import com.oli.projectsai.ui.common.copyToClipboard
 import com.oli.projectsai.ui.common.shareText
 import com.oli.projectsai.ui.components.TokenBreakdown
+import kotlinx.coroutines.delay
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CancellationException
@@ -34,6 +39,8 @@ class ChatViewModel @Inject constructor(
     private val projectRepository: ProjectRepository,
     private val inferenceManager: InferenceManager,
     private val globalContextStore: GlobalContextStore,
+    private val attachmentStore: AttachmentStore,
+    private val audioCapture: AudioCapture,
     @ApplicationContext private val appContext: Context
 ) : ViewModel() {
 
@@ -67,6 +74,25 @@ class ChatViewModel @Inject constructor(
     val error: StateFlow<ChatError?> = _error.asStateFlow()
 
     private var lastFailedUserContent: String? = null
+    private var lastFailedAttachments: List<String> = emptyList()
+
+    private val _pendingAttachments = MutableStateFlow<List<String>>(emptyList())
+    val pendingAttachments: StateFlow<List<String>> = _pendingAttachments.asStateFlow()
+
+    sealed class DictationState {
+        data object Idle : DictationState()
+        data class Recording(val elapsedMs: Long) : DictationState()
+        data object Transcribing : DictationState()
+        data class Error(val message: String) : DictationState()
+    }
+
+    private val _dictationState = MutableStateFlow<DictationState>(DictationState.Idle)
+    val dictationState: StateFlow<DictationState> = _dictationState.asStateFlow()
+
+    private val _transcribedText = MutableStateFlow<String?>(null)
+    val transcribedText: StateFlow<String?> = _transcribedText.asStateFlow()
+
+    private var dictationJob: Job? = null
 
     private val _chatTitle = MutableStateFlow("New Chat")
     val chatTitle: StateFlow<String> = _chatTitle.asStateFlow()
@@ -179,7 +205,9 @@ class ChatViewModel @Inject constructor(
     }
 
     fun sendMessage(content: String) {
-        if (content.isBlank() || _isGenerating.value) return
+        val attachments = _pendingAttachments.value
+        if (content.isBlank() && attachments.isEmpty()) return
+        if (_isGenerating.value) return
 
         val trimmed = content.trim()
         generationJob = viewModelScope.launch {
@@ -189,7 +217,8 @@ class ChatViewModel @Inject constructor(
                         chatId = activeChatId,
                         role = MessageRole.USER,
                         content = trimmed,
-                        tokenCount = inferenceManager.countTokens(trimmed)
+                        tokenCount = inferenceManager.countTokens(trimmed),
+                        attachmentPaths = attachments
                     )
                 )
                 true
@@ -199,21 +228,42 @@ class ChatViewModel @Inject constructor(
             }
             if (!persisted) return@launch
 
+            _pendingAttachments.value = emptyList()
+
             if (_messages.value.isEmpty()) {
-                val title = trimmed.take(50).let { if (trimmed.length > 50) "$it..." else it }
+                val titleSource = trimmed.ifBlank { "Image chat" }
+                val title = titleSource.take(50).let { if (titleSource.length > 50) "$it..." else it }
                 runCatching { chatRepository.updateChatTitle(activeChatId, title) }
                 _chatTitle.value = title
             }
 
-            generate(currentUserContent = trimmed)
+            generate(currentUserContent = trimmed, currentAttachments = attachments)
         }
+    }
+
+    fun addAttachment(uri: Uri) {
+        viewModelScope.launch {
+            try {
+                val path = attachmentStore.importImage(uri)
+                _pendingAttachments.value = _pendingAttachments.value + path
+            } catch (t: Throwable) {
+                _error.value = ChatError("Couldn't attach image: ${t.message}", retryable = false)
+            }
+        }
+    }
+
+    fun removePendingAttachment(path: String) {
+        _pendingAttachments.value = _pendingAttachments.value.filterNot { it == path }
     }
 
     fun retryLastPrompt() {
         val content = lastFailedUserContent ?: return
         if (_isGenerating.value) return
         _error.value = null
-        generationJob = viewModelScope.launch { generate(currentUserContent = content) }
+        val atts = lastFailedAttachments
+        generationJob = viewModelScope.launch {
+            generate(currentUserContent = content, currentAttachments = atts)
+        }
     }
 
     fun cancelGeneration() {
@@ -221,7 +271,10 @@ class ChatViewModel @Inject constructor(
         generationJob?.cancel(CancellationException("User cancelled generation"))
     }
 
-    private suspend fun generate(currentUserContent: String? = null) {
+    private suspend fun generate(
+        currentUserContent: String? = null,
+        currentAttachments: List<String> = emptyList()
+    ) {
         _isGenerating.value = true
         _streamingContent.value = ""
         _error.value = null
@@ -229,12 +282,25 @@ class ChatViewModel @Inject constructor(
         val fullResponse = StringBuilder()
         var cancelled = false
         try {
-            val dbMessages = _messages.value.map { msg ->
-                ChatMessage(role = msg.role.toWireRole(), content = msg.content)
+            val dbMessages = _messages.value.mapIndexed { idx, msg ->
+                val isLast = idx == _messages.value.lastIndex
+                val bytes = if (isLast && msg.role == MessageRole.USER) {
+                    msg.attachmentPaths.map { attachmentStore.readBytes(it) }
+                } else emptyList()
+                ChatMessage(
+                    role = msg.role.toWireRole(),
+                    content = msg.content,
+                    imageBytes = bytes
+                )
             }
             val chatMessages = if (currentUserContent != null &&
                 dbMessages.lastOrNull()?.content != currentUserContent) {
-                dbMessages + ChatMessage(role = "user", content = currentUserContent)
+                val bytes = currentAttachments.map { attachmentStore.readBytes(it) }
+                dbMessages + ChatMessage(
+                    role = "user",
+                    content = currentUserContent,
+                    imageBytes = bytes
+                )
             } else {
                 dbMessages
             }
@@ -255,6 +321,7 @@ class ChatViewModel @Inject constructor(
             }
         } catch (ie: InferenceError) {
             lastFailedUserContent = currentUserContent
+            lastFailedAttachments = currentAttachments
             _error.value = when (ie) {
                 is InferenceError.ModelNotLoaded ->
                     ChatError("Load a model to start generating.", retryable = false)
@@ -270,11 +337,13 @@ class ChatViewModel @Inject constructor(
             throw ce
         } catch (t: Throwable) {
             lastFailedUserContent = currentUserContent
+            lastFailedAttachments = currentAttachments
             _error.value = ChatError(t.message ?: "Generation failed.", retryable = true)
         } finally {
             val responseText = fullResponse.toString()
             if (responseText.isNotBlank()) {
                 lastFailedUserContent = null
+                lastFailedAttachments = emptyList()
                 // Persist even on cancel so the user's partial answer isn't lost.
                 runCatching {
                     chatRepository.addMessage(
@@ -289,6 +358,83 @@ class ChatViewModel @Inject constructor(
             }
             _isGenerating.value = false
             _streamingContent.value = ""
+        }
+    }
+
+    fun startDictation() {
+        if (dictationJob?.isActive == true) return
+        if (!isModelLoaded) {
+            _dictationState.value = DictationState.Error("Load a model first.")
+            return
+        }
+        _transcribedText.value = null
+        dictationJob = viewModelScope.launch {
+            try {
+                audioCapture.start()
+            } catch (t: Throwable) {
+                _dictationState.value = DictationState.Error(t.message ?: "Microphone unavailable")
+                return@launch
+            }
+            val startedAt = System.currentTimeMillis()
+            val maxMs = TRANSCRIPTION_MAX_SECONDS * 1000L
+            _dictationState.value = DictationState.Recording(0L)
+            try {
+                while (audioCapture.isRecording) {
+                    val elapsed = System.currentTimeMillis() - startedAt
+                    _dictationState.value = DictationState.Recording(elapsed)
+                    if (elapsed >= maxMs) break
+                    delay(200L)
+                }
+            } catch (ce: CancellationException) {
+                audioCapture.cancel()
+                _dictationState.value = DictationState.Idle
+                throw ce
+            }
+            finishDictation()
+        }
+    }
+
+    fun stopDictation() {
+        val job = dictationJob ?: return
+        if (!job.isActive) return
+        viewModelScope.launch { finishDictation() }
+    }
+
+    fun cancelDictation() {
+        audioCapture.cancel()
+        dictationJob?.cancel()
+        dictationJob = null
+        _dictationState.value = DictationState.Idle
+    }
+
+    private suspend fun finishDictation() {
+        if (_dictationState.value is DictationState.Transcribing) return
+        _dictationState.value = DictationState.Transcribing
+        val bytes = audioCapture.stop()
+        if (bytes.isEmpty()) {
+            _dictationState.value = DictationState.Idle
+            return
+        }
+        try {
+            val text = inferenceManager.transcribe(bytes).trim()
+            _transcribedText.value = text
+            _dictationState.value = DictationState.Idle
+        } catch (t: Throwable) {
+            _dictationState.value = DictationState.Error(t.message ?: "Transcription failed")
+        } finally {
+            dictationJob = null
+        }
+    }
+
+    fun consumeTranscribedText(): String? {
+        val text = _transcribedText.value
+        _transcribedText.value = null
+        return text
+    }
+
+    fun dismissDictationError() {
+        if (_dictationState.value is DictationState.Error) {
+            _dictationState.value = DictationState.Idle
         }
     }
 

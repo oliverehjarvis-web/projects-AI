@@ -25,5 +25,7 @@ data class Message(
     val role: MessageRole,
     val content: String,
     val tokenCount: Int = 0,
-    val createdAt: Long = System.currentTimeMillis()
+    val createdAt: Long = System.currentTimeMillis(),
+    /** Absolute paths to image files in app-private storage, in display order. */
+    val attachmentPaths: List<String> = emptyList()
 )
