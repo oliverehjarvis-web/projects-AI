@@ -7,6 +7,7 @@ import androidx.core.content.FileProvider
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.oli.projectsai.BuildConfig
+import com.oli.projectsai.data.preferences.SearchSettings
 import com.oli.projectsai.data.update.UpdateChecker
 import com.oli.projectsai.data.update.UpdateInfo
 import com.oli.projectsai.inference.InferenceBackend
@@ -16,8 +17,10 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import java.io.File
 import javax.inject.Inject
@@ -36,7 +39,8 @@ sealed class UpdateState {
 class SettingsViewModel @Inject constructor(
     @ApplicationContext private val context: Context,
     private val inferenceManager: InferenceManager,
-    private val updateChecker: UpdateChecker
+    private val updateChecker: UpdateChecker,
+    private val searchSettings: SearchSettings
 ) : ViewModel() {
 
     companion object {
@@ -48,6 +52,14 @@ class SettingsViewModel @Inject constructor(
     val backends: StateFlow<List<InferenceBackend>> = MutableStateFlow(
         inferenceManager.getAvailableBackends()
     )
+
+    val braveApiKey: StateFlow<String> = searchSettings.braveApiKey.stateIn(
+        viewModelScope, SharingStarted.Eagerly, ""
+    )
+
+    fun setBraveApiKey(value: String) {
+        viewModelScope.launch { searchSettings.setBraveApiKey(value) }
+    }
 
     private val _updateState = MutableStateFlow<UpdateState>(UpdateState.Idle)
     val updateState: StateFlow<UpdateState> = _updateState.asStateFlow()

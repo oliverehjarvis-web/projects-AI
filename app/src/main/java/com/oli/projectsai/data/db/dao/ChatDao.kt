@@ -26,4 +26,7 @@ interface ChatDao {
 
     @Query("UPDATE chats SET title = :title, updatedAt = :now WHERE id = :chatId")
     suspend fun updateTitle(chatId: Long, title: String, now: Long = System.currentTimeMillis())
+
+    @Query("UPDATE chats SET webSearchEnabled = :enabled WHERE id = :chatId")
+    suspend fun updateWebSearchEnabled(chatId: Long, enabled: Boolean)
 }

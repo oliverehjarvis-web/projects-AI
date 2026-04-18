@@ -16,7 +16,7 @@ import com.oli.projectsai.data.db.entity.*
         Message::class,
         QuickAction::class
     ],
-    version = 2,
+    version = 3,
     exportSchema = true
 )
 @TypeConverters(Converters::class)
@@ -33,6 +33,14 @@ abstract class AppDatabase : RoomDatabase() {
                 // (see Converters). Default empty string = empty list.
                 db.execSQL(
                     "ALTER TABLE messages ADD COLUMN attachmentPaths TEXT NOT NULL DEFAULT ''"
+                )
+            }
+        }
+
+        val MIGRATION_2_3 = object : Migration(2, 3) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "ALTER TABLE chats ADD COLUMN webSearchEnabled INTEGER NOT NULL DEFAULT 0"
                 )
             }
         }

@@ -59,6 +59,8 @@ fun ChatScreen(
     val pendingAttachments by viewModel.pendingAttachments.collectAsStateWithLifecycle()
     val dictationState by viewModel.dictationState.collectAsStateWithLifecycle()
     val transcribedText by viewModel.transcribedText.collectAsStateWithLifecycle()
+    val webSearchEnabled by viewModel.webSearchEnabled.collectAsStateWithLifecycle()
+    val searchStatus by viewModel.searchStatus.collectAsStateWithLifecycle()
 
     val systemContext by viewModel.systemContext.collectAsStateWithLifecycle()
 
@@ -111,6 +113,14 @@ fun ChatScreen(
                     }
                 },
                 actions = {
+                    IconButton(onClick = { viewModel.toggleWebSearch() }) {
+                        Icon(
+                            if (webSearchEnabled) Icons.Default.TravelExplore else Icons.Default.Public,
+                            if (webSearchEnabled) "Web search on" else "Web search off",
+                            tint = if (webSearchEnabled) MaterialTheme.colorScheme.primary
+                            else LocalContentColor.current
+                        )
+                    }
                     IconButton(onClick = { viewModel.shareConversation() }) {
                         Icon(Icons.Default.Share, "Export conversation")
                     }
@@ -212,6 +222,26 @@ fun ChatScreen(
                 state = dictationState,
                 onDismissError = { viewModel.dismissDictationError() }
             )
+
+            searchStatus?.let { status ->
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 12.dp, vertical = 4.dp),
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.secondaryContainer
+                    )
+                ) {
+                    Row(
+                        modifier = Modifier.padding(12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                        Text(status, style = MaterialTheme.typography.bodySmall)
+                    }
+                }
+            }
 
             // Messages
             LazyColumn(

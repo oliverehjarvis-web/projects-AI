@@ -23,6 +23,9 @@ class ChatRepository @Inject constructor(
 
     suspend fun updateChatTitle(chatId: Long, title: String) = chatDao.updateTitle(chatId, title)
 
+    suspend fun updateWebSearchEnabled(chatId: Long, enabled: Boolean) =
+        chatDao.updateWebSearchEnabled(chatId, enabled)
+
     suspend fun deleteChat(chat: Chat) = chatDao.delete(chat)
 
     suspend fun deleteChats(ids: List<Long>) = chatDao.deleteByIds(ids)

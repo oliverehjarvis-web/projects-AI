@@ -28,6 +28,7 @@ fun SettingsScreen(
     val modelState by viewModel.modelState.collectAsStateWithLifecycle()
     val backends by viewModel.backends.collectAsStateWithLifecycle()
     val updateState by viewModel.updateState.collectAsStateWithLifecycle()
+    val braveApiKey by viewModel.braveApiKey.collectAsStateWithLifecycle()
 
     // Auto-launch installer when APK is ready
     val currentUpdateState = updateState
@@ -91,6 +92,19 @@ fun SettingsScreen(
                 supportingContent = { Text("Your name and rules the assistant follows in every project.") },
                 leadingContent = { Icon(Icons.Default.Person, null) },
                 modifier = Modifier.clickable(onClick = onGlobalContext)
+            )
+
+            HorizontalDivider()
+
+            Text(
+                "Web search",
+                style = MaterialTheme.typography.titleSmall,
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)
+            )
+
+            BraveApiKeyField(
+                currentKey = braveApiKey,
+                onSave = { viewModel.setBraveApiKey(it) }
             )
 
             HorizontalDivider()
@@ -274,6 +288,58 @@ private fun UpdateSection(
                     TextButton(onClick = onCheckForUpdate) { Text("Retry") }
                 }
             )
+        }
+    }
+}
+
+@Composable
+private fun BraveApiKeyField(
+    currentKey: String,
+    onSave: (String) -> Unit
+) {
+    var draft by remember(currentKey) { mutableStateOf(currentKey) }
+    var reveal by remember { mutableStateOf(false) }
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 4.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        Text(
+            "Paste your Brave Search API key to enable per-chat web search. " +
+                "Get a free key at api.search.brave.com.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        OutlinedTextField(
+            value = draft,
+            onValueChange = { draft = it },
+            modifier = Modifier.fillMaxWidth(),
+            placeholder = { Text("BSA…") },
+            singleLine = true,
+            visualTransformation = if (reveal) androidx.compose.ui.text.input.VisualTransformation.None
+            else androidx.compose.ui.text.input.PasswordVisualTransformation(),
+            trailingIcon = {
+                IconButton(onClick = { reveal = !reveal }) {
+                    Icon(
+                        if (reveal) Icons.Default.VisibilityOff else Icons.Default.Visibility,
+                        if (reveal) "Hide" else "Show"
+                    )
+                }
+            }
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Button(
+                onClick = { onSave(draft) },
+                enabled = draft != currentKey
+            ) { Text("Save") }
+            if (currentKey.isNotEmpty()) {
+                OutlinedButton(onClick = {
+                    draft = ""
+                    onSave("")
+                }) { Text("Clear") }
+            }
         }
     }
 }

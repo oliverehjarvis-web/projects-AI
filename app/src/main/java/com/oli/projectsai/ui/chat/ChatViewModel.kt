@@ -12,6 +12,7 @@ import com.oli.projectsai.data.db.entity.MessageRole
 import com.oli.projectsai.data.preferences.GlobalContextStore
 import com.oli.projectsai.data.repository.ChatRepository
 import com.oli.projectsai.data.repository.ProjectRepository
+import com.oli.projectsai.data.search.WebSearchClient
 import com.oli.projectsai.inference.AudioCapture
 import com.oli.projectsai.inference.ChatMessage
 import com.oli.projectsai.inference.GenerationConfig
@@ -41,6 +42,7 @@ class ChatViewModel @Inject constructor(
     private val globalContextStore: GlobalContextStore,
     private val attachmentStore: AttachmentStore,
     private val audioCapture: AudioCapture,
+    private val webSearchClient: WebSearchClient,
     @ApplicationContext private val appContext: Context
 ) : ViewModel() {
 
@@ -97,6 +99,12 @@ class ChatViewModel @Inject constructor(
     private val _chatTitle = MutableStateFlow("New Chat")
     val chatTitle: StateFlow<String> = _chatTitle.asStateFlow()
 
+    private val _webSearchEnabled = MutableStateFlow(false)
+    val webSearchEnabled: StateFlow<Boolean> = _webSearchEnabled.asStateFlow()
+
+    private val _searchStatus = MutableStateFlow<String?>(null)
+    val searchStatus: StateFlow<String?> = _searchStatus.asStateFlow()
+
     private var generationJob: Job? = null
 
     init {
@@ -124,6 +132,7 @@ class ChatViewModel @Inject constructor(
                 if (chat != null) {
                     activeChatId = chat.id
                     _chatTitle.value = chat.title
+                    _webSearchEnabled.value = chat.webSearchEnabled
                     loadProjectContext(chat.projectId)
                     chatRepository.getMessagesFlow(chatId).collect { msgs ->
                         _messages.value = msgs
@@ -271,6 +280,14 @@ class ChatViewModel @Inject constructor(
         generationJob?.cancel(CancellationException("User cancelled generation"))
     }
 
+    fun toggleWebSearch() {
+        val next = !_webSearchEnabled.value
+        _webSearchEnabled.value = next
+        viewModelScope.launch {
+            runCatching { chatRepository.updateWebSearchEnabled(activeChatId, next) }
+        }
+    }
+
     private suspend fun generate(
         currentUserContent: String? = null,
         currentAttachments: List<String> = emptyList()
@@ -305,19 +322,69 @@ class ChatViewModel @Inject constructor(
                 dbMessages
             }
 
-            val responseFlow = inferenceManager.generate(
-                systemPrompt = systemPrompt,
-                messages = chatMessages,
-                config = GenerationConfig()
-            )
+            val searchEnabled = _webSearchEnabled.value
+            val effectiveSystemPrompt = if (searchEnabled) {
+                systemPrompt + "\n\n" + SEARCH_TOOL_INSTRUCTIONS
+            } else systemPrompt
 
+            val firstBuf = StringBuilder()
             try {
-                responseFlow.collect { token ->
-                    fullResponse.append(token)
-                    _streamingContent.value = fullResponse.toString()
+                inferenceManager.generate(
+                    systemPrompt = effectiveSystemPrompt,
+                    messages = chatMessages,
+                    config = GenerationConfig()
+                ).collect { token ->
+                    firstBuf.append(token)
+                    _streamingContent.value = if (searchEnabled) {
+                        stripAfterSearchOpen(firstBuf.toString())
+                    } else {
+                        firstBuf.toString()
+                    }
                 }
             } catch (ce: CancellationException) {
                 cancelled = true
+            }
+
+            val firstText = firstBuf.toString()
+            val searchMatch = if (searchEnabled && !cancelled) {
+                SEARCH_TAG_REGEX.find(firstText)
+            } else null
+
+            if (searchMatch != null) {
+                val query = searchMatch.groupValues[1].trim()
+                _searchStatus.value = "Searching: $query"
+                val resultsText = try {
+                    val results = webSearchClient.search(query)
+                    WebSearchClient.formatForPrompt(query, results)
+                } catch (t: Throwable) {
+                    "Search failed: ${t.message ?: "unknown error"}"
+                } finally {
+                    _searchStatus.value = null
+                }
+
+                val continuationMessages = chatMessages + listOf(
+                    ChatMessage(role = "model", content = "<search>$query</search>"),
+                    ChatMessage(
+                        role = "user",
+                        content = "Search results:\n\n$resultsText\n\n" +
+                            "Use these to answer my previous question. Do not call <search> again."
+                    )
+                )
+                _streamingContent.value = ""
+                try {
+                    inferenceManager.generate(
+                        systemPrompt = effectiveSystemPrompt,
+                        messages = continuationMessages,
+                        config = GenerationConfig()
+                    ).collect { token ->
+                        fullResponse.append(token)
+                        _streamingContent.value = fullResponse.toString()
+                    }
+                } catch (ce: CancellationException) {
+                    cancelled = true
+                }
+            } else {
+                fullResponse.append(firstText)
             }
         } catch (ie: InferenceError) {
             lastFailedUserContent = currentUserContent
@@ -513,3 +580,29 @@ private fun MessageRole.toWireRole(): String = when (this) {
     MessageRole.ASSISTANT -> "model"
     MessageRole.SYSTEM -> "system"
 }
+
+private val SEARCH_TAG_REGEX = Regex("<search>(.*?)</search>", RegexOption.DOT_MATCHES_ALL)
+
+/**
+ * Hides a partial <search> tag from the user while it streams in. Once we know the full query
+ * we'll run the search and stream the real answer, so showing the tag itself only confuses.
+ */
+private fun stripAfterSearchOpen(text: String): String {
+    val i = text.indexOf("<search>")
+    return if (i >= 0) text.substring(0, i) else text
+}
+
+private val SEARCH_TOOL_INSTRUCTIONS = """
+You have access to a web search tool. When the user's question needs current or specific
+information you don't already know (news, dates, stats, recent events, specific facts),
+respond with exactly:
+
+<search>your concise search query</search>
+
+and nothing else on that turn. You will then receive search results and should give
+your final answer using them.
+
+If you can answer from what you already know, answer directly — do not use <search> tags
+in normal answers. Only use the tag when you would otherwise need to look something up.
+""".trimIndent()
+

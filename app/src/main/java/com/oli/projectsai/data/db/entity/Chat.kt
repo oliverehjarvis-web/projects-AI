@@ -22,5 +22,7 @@ data class Chat(
     val projectId: Long,
     val title: String = "New Chat",
     val createdAt: Long = System.currentTimeMillis(),
-    val updatedAt: Long = System.currentTimeMillis()
+    val updatedAt: Long = System.currentTimeMillis(),
+    /** When true, the assistant may call out to web search via the <search> tool protocol. */
+    val webSearchEnabled: Boolean = false
 )
