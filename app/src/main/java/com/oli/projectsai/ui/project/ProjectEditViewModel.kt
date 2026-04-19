@@ -38,8 +38,13 @@ class ProjectEditViewModel @Inject constructor(
     private val _memoryTokenLimit = MutableStateFlow(4000)
     val memoryTokenLimit: StateFlow<Int> = _memoryTokenLimit.asStateFlow()
 
+    private val _contextLength = MutableStateFlow(16384)
+    val contextLength: StateFlow<Int> = _contextLength.asStateFlow()
+
     private val _contextTokenCount = MutableStateFlow(0)
     val contextTokenCount: StateFlow<Int> = _contextTokenCount.asStateFlow()
+
+    val contextLengthOptions: List<Int> = listOf(4096, 8192, 16384, 24576, 32768)
 
     private var existingProject: Project? = null
 
@@ -52,6 +57,7 @@ class ProjectEditViewModel @Inject constructor(
                     _description.value = p.description
                     _manualContext.value = p.manualContext
                     _memoryTokenLimit.value = p.memoryTokenLimit
+                    _contextLength.value = p.contextLength
                 }
             }
         }
@@ -74,6 +80,10 @@ class ProjectEditViewModel @Inject constructor(
         _memoryTokenLimit.value = value.coerceIn(1000, 32000)
     }
 
+    fun updateContextLength(value: Int) {
+        if (value in contextLengthOptions) _contextLength.value = value
+    }
+
     fun save() {
         viewModelScope.launch {
             val existing = existingProject
@@ -83,7 +93,8 @@ class ProjectEditViewModel @Inject constructor(
                         name = _name.value.trim(),
                         description = _description.value.trim(),
                         manualContext = _manualContext.value,
-                        memoryTokenLimit = _memoryTokenLimit.value
+                        memoryTokenLimit = _memoryTokenLimit.value,
+                        contextLength = _contextLength.value
                     )
                 )
             } else {
@@ -92,7 +103,8 @@ class ProjectEditViewModel @Inject constructor(
                         name = _name.value.trim(),
                         description = _description.value.trim(),
                         manualContext = _manualContext.value,
-                        memoryTokenLimit = _memoryTokenLimit.value
+                        memoryTokenLimit = _memoryTokenLimit.value,
+                        contextLength = _contextLength.value
                     )
                 )
             }

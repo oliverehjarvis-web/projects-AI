@@ -178,6 +178,20 @@ class ChatViewModel @Inject constructor(
         val rules = globalContextStore.rules.first()
         systemPrompt = buildSystemPrompt(name, rules, project.manualContext, project.accumulatedMemory)
         refreshContextTokenBreakdown(name, rules, project.manualContext, project.accumulatedMemory)
+        reloadModelIfContextDiffers(project.contextLength)
+    }
+
+    /**
+     * If a model is loaded but its context length doesn't match what this project wants, reload
+     * at the project's length. Costs a few seconds but keeps the KV cache sized appropriately
+     * for the project's tradeoff between capacity and decode speed.
+     */
+    private suspend fun reloadModelIfContextDiffers(projectContextLength: Int) {
+        val loaded = inferenceManager.modelState.value as? ModelState.Loaded ?: return
+        if (loaded.modelInfo.contextLength == projectContextLength) return
+        runCatching {
+            inferenceManager.loadModel(loaded.modelInfo.copy(contextLength = projectContextLength))
+        }
     }
 
     private fun buildSystemPrompt(

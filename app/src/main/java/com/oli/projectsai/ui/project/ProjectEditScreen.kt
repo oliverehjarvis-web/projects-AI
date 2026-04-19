@@ -24,7 +24,9 @@ fun ProjectEditScreen(
     val description by viewModel.description.collectAsStateWithLifecycle()
     val manualContext by viewModel.manualContext.collectAsStateWithLifecycle()
     val memoryTokenLimit by viewModel.memoryTokenLimit.collectAsStateWithLifecycle()
+    val contextLength by viewModel.contextLength.collectAsStateWithLifecycle()
     val contextTokenCount by viewModel.contextTokenCount.collectAsStateWithLifecycle()
+    val contextOptions = viewModel.contextLengthOptions
 
     Scaffold(
         topBar = {
@@ -106,6 +108,42 @@ fun ProjectEditScreen(
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth()
             )
+
+            HorizontalDivider()
+
+            Text("Context length", style = MaterialTheme.typography.titleSmall)
+            Text(
+                "Larger context lets the model remember more of a conversation but slows generation. " +
+                    "Changing this reloads the model when you next open a chat in this project.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+
+            val selectedIdx = contextOptions.indexOf(contextLength).let { if (it < 0) 2 else it }
+            Slider(
+                value = selectedIdx.toFloat(),
+                onValueChange = { v ->
+                    viewModel.updateContextLength(contextOptions[v.toInt().coerceIn(0, contextOptions.lastIndex)])
+                },
+                valueRange = 0f..(contextOptions.lastIndex).toFloat(),
+                steps = contextOptions.size - 2,
+                modifier = Modifier.fillMaxWidth()
+            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                contextOptions.forEach { v ->
+                    val label = if (v >= 1024) "${v / 1024}K" else v.toString()
+                    Text(
+                        label,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = if (v == contextLength)
+                            MaterialTheme.colorScheme.primary
+                        else MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
         }
     }
 }
