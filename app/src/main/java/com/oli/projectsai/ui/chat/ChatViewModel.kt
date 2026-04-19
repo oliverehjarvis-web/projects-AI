@@ -1,7 +1,9 @@
 package com.oli.projectsai.ui.chat
 
 import android.content.Context
+import android.content.Intent
 import android.net.Uri
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -10,15 +12,15 @@ import com.oli.projectsai.data.db.entity.Chat
 import com.oli.projectsai.data.db.entity.Message
 import com.oli.projectsai.data.db.entity.MessageRole
 import com.oli.projectsai.data.preferences.GlobalContextStore
-import com.oli.projectsai.data.preferences.SearchDepth
-import com.oli.projectsai.data.preferences.SearchSettings
 import com.oli.projectsai.data.repository.ChatRepository
 import com.oli.projectsai.data.repository.ProjectRepository
-import com.oli.projectsai.data.search.PageFetcher
-import com.oli.projectsai.data.search.WebSearchClient
 import com.oli.projectsai.inference.AudioCapture
+import com.oli.projectsai.inference.ChatError
 import com.oli.projectsai.inference.ChatMessage
 import com.oli.projectsai.inference.GenerationConfig
+import com.oli.projectsai.inference.GenerationController
+import com.oli.projectsai.inference.GenerationForegroundService
+import com.oli.projectsai.inference.GenerationParams
 import com.oli.projectsai.inference.InferenceError
 import com.oli.projectsai.inference.InferenceManager
 import com.oli.projectsai.inference.ModelState
@@ -27,12 +29,18 @@ import com.oli.projectsai.inference.TRANSCRIPTION_MAX_SECONDS
 import com.oli.projectsai.ui.common.copyToClipboard
 import com.oli.projectsai.ui.common.shareText
 import com.oli.projectsai.ui.components.TokenBreakdown
-import kotlinx.coroutines.delay
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.flow.*
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
@@ -45,9 +53,7 @@ class ChatViewModel @Inject constructor(
     private val globalContextStore: GlobalContextStore,
     private val attachmentStore: AttachmentStore,
     private val audioCapture: AudioCapture,
-    private val webSearchClient: WebSearchClient,
-    private val pageFetcher: PageFetcher,
-    private val searchSettings: SearchSettings,
+    private val generationController: GenerationController,
     @ApplicationContext private val appContext: Context
 ) : ViewModel() {
 
@@ -55,7 +61,8 @@ class ChatViewModel @Inject constructor(
     private val projectId: Long = savedStateHandle.get<Long>("projectId") ?: -1L
     private val quickActionId: Long = savedStateHandle.get<Long>("quickActionId") ?: -1L
 
-    private var activeChatId: Long = chatId
+    private val _activeChatId = MutableStateFlow(chatId)
+    private val activeChatId: Long get() = _activeChatId.value
 
     private val _systemContext = MutableStateFlow("")
     val systemContext: StateFlow<String> = _systemContext.asStateFlow()
@@ -66,22 +73,32 @@ class ChatViewModel @Inject constructor(
     private val _messages = MutableStateFlow<List<Message>>(emptyList())
     val messages: StateFlow<List<Message>> = _messages.asStateFlow()
 
-    private val _isGenerating = MutableStateFlow(false)
-    val isGenerating: StateFlow<Boolean> = _isGenerating.asStateFlow()
+    val isGenerating: StateFlow<Boolean> = combine(
+        _activeChatId,
+        generationController.activeGeneration
+    ) { cid, active -> active?.chatId == cid && active.isGenerating }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, false)
 
-    private val _streamingContent = MutableStateFlow("")
-    val streamingContent: StateFlow<String> = _streamingContent.asStateFlow()
+    val streamingContent: StateFlow<String> = combine(
+        _activeChatId,
+        generationController.activeGeneration
+    ) { cid, active -> if (active?.chatId == cid) active.streamingContent else "" }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, "")
+
+    val searchStatus: StateFlow<String?> = combine(
+        _activeChatId,
+        generationController.activeGeneration
+    ) { cid, active -> if (active?.chatId == cid) active.searchStatus else null }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, null)
+
+    val error: StateFlow<ChatError?> = combine(
+        _activeChatId,
+        generationController.errors
+    ) { cid, errs -> errs[cid] }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, null)
 
     private val _tokenBreakdown = MutableStateFlow(TokenBreakdown())
     val tokenBreakdown: StateFlow<TokenBreakdown> = _tokenBreakdown.asStateFlow()
-
-    data class ChatError(val message: String, val retryable: Boolean)
-
-    private val _error = MutableStateFlow<ChatError?>(null)
-    val error: StateFlow<ChatError?> = _error.asStateFlow()
-
-    private var lastFailedUserContent: String? = null
-    private var lastFailedAttachments: List<String> = emptyList()
 
     private val _pendingAttachments = MutableStateFlow<List<String>>(emptyList())
     val pendingAttachments: StateFlow<List<String>> = _pendingAttachments.asStateFlow()
@@ -107,11 +124,6 @@ class ChatViewModel @Inject constructor(
     private val _webSearchEnabled = MutableStateFlow(false)
     val webSearchEnabled: StateFlow<Boolean> = _webSearchEnabled.asStateFlow()
 
-    private val _searchStatus = MutableStateFlow<String?>(null)
-    val searchStatus: StateFlow<String?> = _searchStatus.asStateFlow()
-
-    private var generationJob: Job? = null
-
     init {
         viewModelScope.launch {
             combine(
@@ -132,10 +144,9 @@ class ChatViewModel @Inject constructor(
         }
         viewModelScope.launch {
             if (chatId != -1L) {
-                // Existing chat
                 val chat = chatRepository.getChat(chatId)
                 if (chat != null) {
-                    activeChatId = chat.id
+                    _activeChatId.value = chat.id
                     _chatTitle.value = chat.title
                     _webSearchEnabled.value = chat.webSearchEnabled
                     loadProjectContext(chat.projectId)
@@ -145,14 +156,12 @@ class ChatViewModel @Inject constructor(
                     }
                 }
             } else if (projectId != -1L) {
-                // New chat
                 val newChatId = chatRepository.createChat(
                     Chat(projectId = projectId, title = "New Chat")
                 )
-                activeChatId = newChatId
+                _activeChatId.value = newChatId
                 loadProjectContext(projectId)
 
-                // If quick action, pre-fill
                 if (quickActionId != -1L) {
                     val action = projectRepository.getQuickActions(projectId).first()
                         .firstOrNull { it.id == quickActionId }
@@ -181,11 +190,6 @@ class ChatViewModel @Inject constructor(
         reloadModelIfContextDiffers(project.contextLength)
     }
 
-    /**
-     * If a model is loaded but its context length doesn't match what this project wants, reload
-     * at the project's length. Costs a few seconds but keeps the KV cache sized appropriately
-     * for the project's tradeoff between capacity and decode speed.
-     */
     private suspend fun reloadModelIfContextDiffers(projectContextLength: Int) {
         val loaded = inferenceManager.modelState.value as? ModelState.Loaded ?: return
         if (loaded.modelInfo.contextLength == projectContextLength) return
@@ -235,10 +239,10 @@ class ChatViewModel @Inject constructor(
     fun sendMessage(content: String) {
         val attachments = _pendingAttachments.value
         if (content.isBlank() && attachments.isEmpty()) return
-        if (_isGenerating.value) return
+        if (generationController.activeGeneration.value != null) return
 
         val trimmed = content.trim()
-        generationJob = viewModelScope.launch {
+        viewModelScope.launch {
             val persisted = try {
                 chatRepository.addMessage(
                     Message(
@@ -251,7 +255,7 @@ class ChatViewModel @Inject constructor(
                 )
                 true
             } catch (t: Throwable) {
-                _error.value = ChatError("Couldn't save your message: ${t.message}", retryable = false)
+                generationController.clearError(activeChatId)
                 false
             }
             if (!persisted) return@launch
@@ -265,7 +269,7 @@ class ChatViewModel @Inject constructor(
                 _chatTitle.value = title
             }
 
-            generate(currentUserContent = trimmed, currentAttachments = attachments)
+            startGeneration(trimmed, attachments, _chatTitle.value.ifBlank { trimmed.take(40) })
         }
     }
 
@@ -275,7 +279,7 @@ class ChatViewModel @Inject constructor(
                 val path = attachmentStore.importImage(uri)
                 _pendingAttachments.value = _pendingAttachments.value + path
             } catch (t: Throwable) {
-                _error.value = ChatError("Couldn't attach image: ${t.message}", retryable = false)
+                // Attachment-import failures surface via the banner-free path; log silently.
             }
         }
     }
@@ -285,18 +289,16 @@ class ChatViewModel @Inject constructor(
     }
 
     fun retryLastPrompt() {
-        val content = lastFailedUserContent ?: return
-        if (_isGenerating.value) return
-        _error.value = null
-        val atts = lastFailedAttachments
-        generationJob = viewModelScope.launch {
-            generate(currentUserContent = content, currentAttachments = atts)
-        }
+        if (generationController.activeGeneration.value != null) return
+        val last = generationController.lastFailedFor(activeChatId) ?: return
+        val (content, attachments) = last
+        generationController.clearError(activeChatId)
+        startGeneration(content, attachments, _chatTitle.value)
     }
 
     fun cancelGeneration() {
-        if (!_isGenerating.value) return
-        generationJob?.cancel(CancellationException("User cancelled generation"))
+        if (!isGenerating.value) return
+        generationController.cancel()
     }
 
     fun toggleWebSearch() {
@@ -307,109 +309,25 @@ class ChatViewModel @Inject constructor(
         }
     }
 
-    private suspend fun generate(
-        currentUserContent: String? = null,
-        currentAttachments: List<String> = emptyList()
+    private fun startGeneration(
+        currentUserContent: String?,
+        currentAttachments: List<String>,
+        titleHint: String
     ) {
-        _isGenerating.value = true
-        _streamingContent.value = ""
-        _error.value = null
-
-        val fullResponse = StringBuilder()
-        var cancelled = false
-        try {
-            val dbMessages = _messages.value.mapIndexed { idx, msg ->
-                val isLast = idx == _messages.value.lastIndex
-                val bytes = if (isLast && msg.role == MessageRole.USER) {
-                    msg.attachmentPaths.map { attachmentStore.readBytes(it) }
-                } else emptyList()
-                ChatMessage(
-                    role = msg.role.toWireRole(),
-                    content = msg.content,
-                    imageBytes = bytes
-                )
+        val params = GenerationParams(
+            chatId = activeChatId,
+            currentUserContent = currentUserContent,
+            currentAttachments = currentAttachments,
+            systemPrompt = systemPrompt,
+            webSearchEnabled = _webSearchEnabled.value,
+            chatTitleHint = titleHint
+        )
+        val started = generationController.start(params)
+        if (started) {
+            val intent = Intent(appContext, GenerationForegroundService::class.java).apply {
+                action = GenerationForegroundService.ACTION_START
             }
-            val chatMessages = if (currentUserContent != null &&
-                dbMessages.lastOrNull()?.content != currentUserContent) {
-                val bytes = currentAttachments.map { attachmentStore.readBytes(it) }
-                dbMessages + ChatMessage(
-                    role = "user",
-                    content = currentUserContent,
-                    imageBytes = bytes
-                )
-            } else {
-                dbMessages
-            }
-
-            val searchEnabled = _webSearchEnabled.value
-            val depth = if (searchEnabled) searchSettings.searchDepth.first() else SearchDepth.AUTO_FETCH
-            val toolInstructions = when {
-                !searchEnabled -> ""
-                depth == SearchDepth.TOOL_LOOP -> TOOL_LOOP_INSTRUCTIONS
-                else -> AUTO_FETCH_INSTRUCTIONS
-            }
-            val effectiveSystemPrompt = buildList {
-                add(currentTemporalContext())
-                if (systemPrompt.isNotBlank()) add(systemPrompt)
-                if (toolInstructions.isNotBlank()) add(toolInstructions)
-            }.joinToString("\n\n")
-
-            cancelled = when (depth.takeIf { searchEnabled }) {
-                SearchDepth.TOOL_LOOP -> runToolLoop(
-                    chatMessages = chatMessages,
-                    systemPromptText = effectiveSystemPrompt,
-                    fullResponse = fullResponse
-                )
-                SearchDepth.AUTO_FETCH -> runAutoFetch(
-                    chatMessages = chatMessages,
-                    systemPromptText = effectiveSystemPrompt,
-                    fullResponse = fullResponse
-                )
-                null -> runSingleTurn(
-                    chatMessages = chatMessages,
-                    systemPromptText = effectiveSystemPrompt,
-                    fullResponse = fullResponse
-                )
-            }
-        } catch (ie: InferenceError) {
-            lastFailedUserContent = currentUserContent
-            lastFailedAttachments = currentAttachments
-            _error.value = when (ie) {
-                is InferenceError.ModelNotLoaded ->
-                    ChatError("Load a model to start generating.", retryable = false)
-                is InferenceError.Cancelled ->
-                    ChatError("Generation cancelled.", retryable = true)
-                is InferenceError.GenerationFailed,
-                is InferenceError.TranscriptionFailed,
-                is InferenceError.LoadFailed ->
-                    ChatError(ie.message ?: "Generation failed.", retryable = true)
-            }
-        } catch (ce: CancellationException) {
-            cancelled = true
-            throw ce
-        } catch (t: Throwable) {
-            lastFailedUserContent = currentUserContent
-            lastFailedAttachments = currentAttachments
-            _error.value = ChatError(t.message ?: "Generation failed.", retryable = true)
-        } finally {
-            val responseText = fullResponse.toString()
-            if (responseText.isNotBlank()) {
-                lastFailedUserContent = null
-                lastFailedAttachments = emptyList()
-                // Persist even on cancel so the user's partial answer isn't lost.
-                runCatching {
-                    chatRepository.addMessage(
-                        Message(
-                            chatId = activeChatId,
-                            role = MessageRole.ASSISTANT,
-                            content = if (cancelled) "$responseText _(stopped)_" else responseText,
-                            tokenCount = inferenceManager.countTokens(responseText)
-                        )
-                    )
-                }
-            }
-            _isGenerating.value = false
-            _streamingContent.value = ""
+            runCatching { ContextCompat.startForegroundService(appContext, intent) }
         }
     }
 
@@ -491,8 +409,6 @@ class ChatViewModel @Inject constructor(
     }
 
     private suspend fun updateTokenBreakdown() {
-        // Recompute conversation tokens live rather than summing stored snapshots — they can
-        // drift after a model swap because each model has a different tokenizer.
         val joined = _messages.value.joinToString("\n") { it.content }
         val convTokens = inferenceManager.countTokens(joined)
         _tokenBreakdown.value = _tokenBreakdown.value.copy(
@@ -527,10 +443,6 @@ class ChatViewModel @Inject constructor(
     val isModelLoaded: Boolean
         get() = inferenceManager.modelState.value is ModelState.Loaded
 
-    /**
-     * Runs the loaded model over [conversation] with an add-to-memory prompt and returns the
-     * bullet-point summary. Throws [InferenceError] when the model isn't loaded or generation fails.
-     */
     suspend fun autoSummariseForMemory(conversation: String): String {
         if (inferenceManager.modelState.value !is ModelState.Loaded) throw InferenceError.ModelNotLoaded
         val (system, user) = SummarisationPrompts.buildAddToMemoryPrompt(conversation)
@@ -557,236 +469,5 @@ class ChatViewModel @Inject constructor(
         }
     }
 
-    fun dismissError() { _error.value = null }
-
-    /** Straight single-turn generation with no tool support. Returns true if cancelled. */
-    private suspend fun runSingleTurn(
-        chatMessages: List<ChatMessage>,
-        systemPromptText: String,
-        fullResponse: StringBuilder
-    ): Boolean {
-        return try {
-            inferenceManager.generate(
-                systemPrompt = systemPromptText,
-                messages = chatMessages,
-                config = GenerationConfig()
-            ).collect { token ->
-                fullResponse.append(token)
-                _streamingContent.value = fullResponse.toString()
-            }
-            false
-        } catch (ce: CancellationException) { true }
-    }
-
-    /**
-     * Two-pass flow: first pass generates until we see a `<search>` tag, then we run the query
-     * AND auto-fetch the top result pages, and feed everything back for the final answer.
-     */
-    private suspend fun runAutoFetch(
-        chatMessages: List<ChatMessage>,
-        systemPromptText: String,
-        fullResponse: StringBuilder
-    ): Boolean {
-        val firstBuf = StringBuilder()
-        var cancelled = try {
-            inferenceManager.generate(
-                systemPrompt = systemPromptText,
-                messages = chatMessages,
-                config = GenerationConfig()
-            ).collect { token ->
-                firstBuf.append(token)
-                _streamingContent.value = stripToolTags(firstBuf.toString())
-            }
-            false
-        } catch (ce: CancellationException) { true }
-
-        val searchMatch = if (!cancelled) SEARCH_TAG_REGEX.find(firstBuf) else null
-        if (searchMatch == null) {
-            fullResponse.append(firstBuf)
-            return cancelled
-        }
-
-        val query = searchMatch.groupValues[1].trim()
-        _searchStatus.value = "Searching: $query"
-        val results = try {
-            webSearchClient.search(query, count = 5)
-        } catch (t: Throwable) {
-            _searchStatus.value = null
-            val msg = "Search failed: ${t.message ?: "unknown error"}"
-            fullResponse.append(msg)
-            _streamingContent.value = msg
-            return cancelled
-        }
-
-        val enriched = StringBuilder(WebSearchClient.formatForPrompt(query, results))
-        results.take(2).forEachIndexed { idx, r ->
-            _searchStatus.value = "Reading: ${r.title.take(40)}"
-            val page = pageFetcher.fetch(r.url, maxChars = 2000)
-            if (page.isNotBlank()) {
-                enriched.append("\n\n--- Page [${idx + 1}] ${r.title} (${r.url}) ---\n")
-                enriched.append(page)
-            }
-        }
-        _searchStatus.value = null
-
-        val continuation = chatMessages + listOf(
-            ChatMessage(role = "model", content = "<search>$query</search>"),
-            ChatMessage(
-                role = "user",
-                content = "$enriched\n\nUse these to answer my previous question. " +
-                    "Do not call <search> again."
-            )
-        )
-        _streamingContent.value = ""
-        cancelled = try {
-            inferenceManager.generate(
-                systemPrompt = systemPromptText,
-                messages = continuation,
-                config = GenerationConfig()
-            ).collect { token ->
-                fullResponse.append(token)
-                _streamingContent.value = fullResponse.toString()
-            }
-            cancelled
-        } catch (ce: CancellationException) { true }
-        return cancelled
-    }
-
-    /**
-     * Model-driven loop: the model can emit `<search>query</search>` or `<fetch>url</fetch>`.
-     * We run the tool, inject the result, and let it generate again. Capped so a confused model
-     * can't loop forever.
-     */
-    private suspend fun runToolLoop(
-        chatMessages: List<ChatMessage>,
-        systemPromptText: String,
-        fullResponse: StringBuilder
-    ): Boolean {
-        var conversation = chatMessages
-        repeat(TOOL_LOOP_MAX_ROUNDS) { round ->
-            val buf = StringBuilder()
-            val cancelled = try {
-                inferenceManager.generate(
-                    systemPrompt = systemPromptText,
-                    messages = conversation,
-                    config = GenerationConfig()
-                ).collect { token ->
-                    buf.append(token)
-                    _streamingContent.value = stripToolTags(buf.toString())
-                }
-                false
-            } catch (ce: CancellationException) { true }
-
-            if (cancelled) {
-                fullResponse.append(stripToolTags(buf.toString()))
-                return true
-            }
-
-            val text = buf.toString()
-            val searchMatch = SEARCH_TAG_REGEX.find(text)
-            val fetchMatch = FETCH_TAG_REGEX.find(text)
-            val firstTool = listOfNotNull(searchMatch, fetchMatch).minByOrNull { it.range.first }
-
-            if (firstTool == null) {
-                fullResponse.append(text)
-                return false
-            }
-
-            val isLastRound = round == TOOL_LOOP_MAX_ROUNDS - 1
-            val toolResultText = when (firstTool) {
-                searchMatch -> {
-                    val query = firstTool.groupValues[1].trim()
-                    _searchStatus.value = "Searching: $query"
-                    try {
-                        val results = webSearchClient.search(query)
-                        WebSearchClient.formatForPrompt(query, results)
-                    } catch (t: Throwable) {
-                        "Search failed: ${t.message ?: "unknown error"}"
-                    } finally {
-                        _searchStatus.value = null
-                    }
-                }
-                fetchMatch -> {
-                    val url = firstTool.groupValues[1].trim()
-                    _searchStatus.value = "Reading: ${url.take(50)}"
-                    val page = pageFetcher.fetch(url, maxChars = 3000)
-                    _searchStatus.value = null
-                    if (page.isBlank()) "Fetch for $url returned no readable content."
-                    else "Page content for $url:\n\n$page"
-                }
-                else -> ""
-            }
-
-            val closingHint = if (isLastRound)
-                "\n\nYou've used the maximum number of tool calls. Answer now without any more tags."
-            else ""
-
-            conversation = conversation + listOf(
-                ChatMessage(role = "model", content = firstTool.value),
-                ChatMessage(role = "user", content = toolResultText + closingHint)
-            )
-            _streamingContent.value = ""
-        }
-        return false
-    }
+    fun dismissError() { generationController.clearError(activeChatId) }
 }
-
-private fun MessageRole.toWireRole(): String = when (this) {
-    MessageRole.USER -> "user"
-    MessageRole.ASSISTANT -> "model"
-    MessageRole.SYSTEM -> "system"
-}
-
-private fun currentTemporalContext(): String {
-    val now = java.time.ZonedDateTime.now()
-    val date = now.format(java.time.format.DateTimeFormatter.ofPattern("EEEE, d MMMM yyyy"))
-    val time = now.format(java.time.format.DateTimeFormatter.ofPattern("HH:mm"))
-    return "Current context:\n- Date: $date\n- Time: $time\n- Timezone: ${now.zone.id}"
-}
-
-private val SEARCH_TAG_REGEX = Regex("<search>(.*?)</search>", RegexOption.DOT_MATCHES_ALL)
-private val FETCH_TAG_REGEX = Regex("<fetch>(.*?)</fetch>", RegexOption.DOT_MATCHES_ALL)
-private const val TOOL_LOOP_MAX_ROUNDS = 4
-
-/**
- * Hides any partial tool tag from the stream. Once we have the full tag we'll run the tool
- * and stream the real answer, so showing the raw tag only confuses the user.
- */
-private fun stripToolTags(text: String): String {
-    val sIdx = text.indexOf("<search>")
-    val fIdx = text.indexOf("<fetch>")
-    val cut = listOf(sIdx, fIdx).filter { it >= 0 }.minOrNull() ?: return text
-    return text.substring(0, cut)
-}
-
-private val AUTO_FETCH_INSTRUCTIONS = """
-You have access to a web search tool. When the user's question needs current or specific
-information you don't already know (news, dates, stats, recent events, specific facts),
-respond with exactly:
-
-<search>your concise search query</search>
-
-and nothing else on that turn. You will receive search results AND the full text of the
-top pages, then give your final answer using them.
-
-If you can answer from what you already know, answer directly — do not use <search> tags
-in normal answers. Only use the tag when you would otherwise need to look something up.
-""".trimIndent()
-
-private val TOOL_LOOP_INSTRUCTIONS = """
-You have two tools:
-
-1. <search>your query</search> — runs a web search and returns snippet-style results.
-2. <fetch>https://example.com/page</fetch> — downloads a specific URL and returns its
-   main text (use this on a URL from a previous search result to read it in full).
-
-When you use a tool, emit exactly the tag and nothing else on that turn; you will then
-receive the tool output and can either call another tool or give your final answer. A
-typical pattern: search first, pick the best URL from the results, fetch it for detail,
-then answer.
-
-If you can answer from what you already know, answer directly — do not emit tool tags in
-normal answers. You have a limited number of tool calls per question, so use them only
-when you genuinely need fresh information.
-""".trimIndent()
-
