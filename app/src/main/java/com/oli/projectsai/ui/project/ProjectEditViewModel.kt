@@ -4,6 +4,7 @@ import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.oli.projectsai.data.db.entity.Project
+import com.oli.projectsai.data.privacy.PrivacySession
 import com.oli.projectsai.data.repository.ProjectRepository
 import com.oli.projectsai.inference.InferenceManager
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -18,8 +19,11 @@ import javax.inject.Inject
 class ProjectEditViewModel @Inject constructor(
     savedStateHandle: SavedStateHandle,
     private val projectRepository: ProjectRepository,
-    private val inferenceManager: InferenceManager
+    private val inferenceManager: InferenceManager,
+    privacySession: PrivacySession
 ) : ViewModel() {
+
+    val canTogglePrivate: StateFlow<Boolean> = privacySession.isUnlocked
 
     private val projectId: Long = savedStateHandle.get<Long>("projectId") ?: -1L
 
@@ -41,6 +45,9 @@ class ProjectEditViewModel @Inject constructor(
     private val _contextLength = MutableStateFlow(16384)
     val contextLength: StateFlow<Int> = _contextLength.asStateFlow()
 
+    private val _isSecret = MutableStateFlow(false)
+    val isSecret: StateFlow<Boolean> = _isSecret.asStateFlow()
+
     private val _contextTokenCount = MutableStateFlow(0)
     val contextTokenCount: StateFlow<Int> = _contextTokenCount.asStateFlow()
 
@@ -58,6 +65,7 @@ class ProjectEditViewModel @Inject constructor(
                     _manualContext.value = p.manualContext
                     _memoryTokenLimit.value = p.memoryTokenLimit
                     _contextLength.value = p.contextLength
+                    _isSecret.value = p.isSecret
                 }
             }
         }
@@ -84,6 +92,10 @@ class ProjectEditViewModel @Inject constructor(
         if (value in contextLengthOptions) _contextLength.value = value
     }
 
+    fun updateIsSecret(value: Boolean) {
+        _isSecret.value = value
+    }
+
     fun save() {
         viewModelScope.launch {
             val existing = existingProject
@@ -94,7 +106,8 @@ class ProjectEditViewModel @Inject constructor(
                         description = _description.value.trim(),
                         manualContext = _manualContext.value,
                         memoryTokenLimit = _memoryTokenLimit.value,
-                        contextLength = _contextLength.value
+                        contextLength = _contextLength.value,
+                        isSecret = _isSecret.value
                     )
                 )
             } else {
@@ -104,7 +117,8 @@ class ProjectEditViewModel @Inject constructor(
                         description = _description.value.trim(),
                         manualContext = _manualContext.value,
                         memoryTokenLimit = _memoryTokenLimit.value,
-                        contextLength = _contextLength.value
+                        contextLength = _contextLength.value,
+                        isSecret = _isSecret.value
                     )
                 )
             }

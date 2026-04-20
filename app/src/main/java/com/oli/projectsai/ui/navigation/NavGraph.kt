@@ -9,6 +9,10 @@ import androidx.navigation.navArgument
 import com.oli.projectsai.ui.chat.ChatScreen
 import com.oli.projectsai.ui.home.HomeScreen
 import com.oli.projectsai.ui.memory.MemoryScreen
+import com.oli.projectsai.ui.privacy.PinSetupScreen
+import com.oli.projectsai.ui.privacy.PrivacyUnlockScreen
+import com.oli.projectsai.ui.privacy.PrivateGateScreen
+import com.oli.projectsai.ui.privacy.PrivateProjectsScreen
 import com.oli.projectsai.ui.project.ProjectDetailScreen
 import com.oli.projectsai.ui.project.ProjectEditScreen
 import com.oli.projectsai.ui.settings.GlobalContextScreen
@@ -27,6 +31,10 @@ object Routes {
     const val MODEL_MANAGEMENT = "settings/model"
     const val GLOBAL_CONTEXT = "settings/global-context"
     const val TRANSCRIPTION = "transcription"
+    const val PRIVATE_GATE = "private/gate"
+    const val PRIVATE_SETUP = "private/setup"
+    const val PRIVATE_UNLOCK = "private/unlock"
+    const val PRIVATE_PROJECTS = "private/projects"
 
     fun projectDetail(projectId: Long) = "project/$projectId"
     fun projectEdit(projectId: Long? = null) = "project/edit?projectId=${projectId ?: -1}"
@@ -107,7 +115,62 @@ fun ProjectsAINavGraph(navController: NavHostController) {
             SettingsScreen(
                 onNavigateBack = { navController.popBackStack() },
                 onModelManagement = { navController.navigate(Routes.MODEL_MANAGEMENT) },
-                onGlobalContext = { navController.navigate(Routes.GLOBAL_CONTEXT) }
+                onGlobalContext = { navController.navigate(Routes.GLOBAL_CONTEXT) },
+                onPrivate = { navController.navigate(Routes.PRIVATE_GATE) }
+            )
+        }
+
+        composable(Routes.PRIVATE_GATE) {
+            PrivateGateScreen(
+                onNeedSetup = {
+                    navController.navigate(Routes.PRIVATE_SETUP) {
+                        popUpTo(Routes.PRIVATE_GATE) { inclusive = true }
+                    }
+                },
+                onNeedUnlock = {
+                    navController.navigate(Routes.PRIVATE_UNLOCK) {
+                        popUpTo(Routes.PRIVATE_GATE) { inclusive = true }
+                    }
+                },
+                onAlreadyUnlocked = {
+                    navController.navigate(Routes.PRIVATE_PROJECTS) {
+                        popUpTo(Routes.PRIVATE_GATE) { inclusive = true }
+                    }
+                }
+            )
+        }
+
+        composable(Routes.PRIVATE_SETUP) {
+            PinSetupScreen(
+                onNavigateBack = { navController.popBackStack() },
+                onSetupComplete = {
+                    navController.navigate(Routes.PRIVATE_PROJECTS) {
+                        popUpTo(Routes.PRIVATE_SETUP) { inclusive = true }
+                    }
+                }
+            )
+        }
+
+        composable(Routes.PRIVATE_UNLOCK) {
+            PrivacyUnlockScreen(
+                onNavigateBack = { navController.popBackStack() },
+                onUnlocked = {
+                    navController.navigate(Routes.PRIVATE_PROJECTS) {
+                        popUpTo(Routes.PRIVATE_UNLOCK) { inclusive = true }
+                    }
+                }
+            )
+        }
+
+        composable(Routes.PRIVATE_PROJECTS) {
+            PrivateProjectsScreen(
+                onNavigateBack = { navController.popBackStack() },
+                onLocked = {
+                    navController.popBackStack(Routes.SETTINGS, inclusive = false)
+                },
+                onProjectClick = { navController.navigate(Routes.projectDetail(it)) },
+                onNewProject = { navController.navigate(Routes.projectEdit()) },
+                onNewChat = { projectId -> navController.navigate(Routes.newChat(projectId)) }
             )
         }
 

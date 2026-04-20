@@ -15,6 +15,8 @@ class ProjectRepository @Inject constructor(
 ) {
     fun getAllProjects(): Flow<List<Project>> = projectDao.getAll()
 
+    fun getSecretProjects(): Flow<List<Project>> = projectDao.getSecretAll()
+
     suspend fun getProject(id: Long): Project? = projectDao.getById(id)
 
     fun getProjectFlow(id: Long): Flow<Project?> = projectDao.getByIdFlow(id)

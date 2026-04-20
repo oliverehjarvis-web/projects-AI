@@ -27,6 +27,8 @@ fun ProjectEditScreen(
     val contextLength by viewModel.contextLength.collectAsStateWithLifecycle()
     val contextTokenCount by viewModel.contextTokenCount.collectAsStateWithLifecycle()
     val contextOptions = viewModel.contextLengthOptions
+    val isSecret by viewModel.isSecret.collectAsStateWithLifecycle()
+    val canTogglePrivate by viewModel.canTogglePrivate.collectAsStateWithLifecycle()
 
     Scaffold(
         topBar = {
@@ -141,6 +143,28 @@ fun ProjectEditScreen(
                         color = if (v == contextLength)
                             MaterialTheme.colorScheme.primary
                         else MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+
+            if (canTogglePrivate) {
+                HorizontalDivider()
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = androidx.compose.ui.Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("Private", style = MaterialTheme.typography.titleSmall)
+                        Text(
+                            "Hide this project from the main list. Only visible after PIN unlock.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Switch(
+                        checked = isSecret,
+                        onCheckedChange = { viewModel.updateIsSecret(it) }
                     )
                 }
             }

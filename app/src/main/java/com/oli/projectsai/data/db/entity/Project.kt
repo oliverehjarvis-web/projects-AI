@@ -17,6 +17,7 @@ data class Project(
     val preferredBackend: PreferredBackend = PreferredBackend.LOCAL,
     val memoryTokenLimit: Int = 4000,
     val contextLength: Int = 16384,
+    val isSecret: Boolean = false,
     val createdAt: Long = System.currentTimeMillis(),
     val updatedAt: Long = System.currentTimeMillis()
 )

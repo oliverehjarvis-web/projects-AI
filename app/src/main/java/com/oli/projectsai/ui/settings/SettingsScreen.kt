@@ -18,14 +18,19 @@ import com.oli.projectsai.BuildConfig
 import com.oli.projectsai.data.preferences.SearchDepth
 import com.oli.projectsai.inference.ModelState
 
+private const val REVEAL_TAPS = 7
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsScreen(
     onNavigateBack: () -> Unit,
     onModelManagement: () -> Unit,
     onGlobalContext: () -> Unit,
+    onPrivate: () -> Unit,
     viewModel: SettingsViewModel = hiltViewModel()
 ) {
+    var aboutTapCount by remember { mutableStateOf(0) }
+    val privateRevealed = aboutTapCount >= REVEAL_TAPS
     val modelState by viewModel.modelState.collectAsStateWithLifecycle()
     val backends by viewModel.backends.collectAsStateWithLifecycle()
     val updateState by viewModel.updateState.collectAsStateWithLifecycle()
@@ -161,8 +166,20 @@ fun SettingsScreen(
             ListItem(
                 headlineContent = { Text("Projects AI") },
                 supportingContent = { Text("v${BuildConfig.VERSION_NAME} - On-device AI with project context") },
-                leadingContent = { Icon(Icons.Default.Info, null) }
+                leadingContent = { Icon(Icons.Default.Info, null) },
+                modifier = Modifier.clickable {
+                    if (aboutTapCount < REVEAL_TAPS) aboutTapCount++
+                }
             )
+
+            if (privateRevealed) {
+                ListItem(
+                    headlineContent = { Text("Private") },
+                    supportingContent = { Text("Hidden projects, PIN-gated") },
+                    leadingContent = { Icon(Icons.Default.Lock, null) },
+                    modifier = Modifier.clickable(onClick = onPrivate)
+                )
+            }
 
             // Update UI
             UpdateSection(

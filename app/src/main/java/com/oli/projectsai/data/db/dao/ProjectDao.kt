@@ -6,8 +6,11 @@ import kotlinx.coroutines.flow.Flow
 
 @Dao
 interface ProjectDao {
-    @Query("SELECT * FROM projects ORDER BY updatedAt DESC")
+    @Query("SELECT * FROM projects WHERE isSecret = 0 ORDER BY updatedAt DESC")
     fun getAll(): Flow<List<Project>>
+
+    @Query("SELECT * FROM projects WHERE isSecret = 1 ORDER BY updatedAt DESC")
+    fun getSecretAll(): Flow<List<Project>>
 
     @Query("SELECT * FROM projects WHERE id = :id")
     suspend fun getById(id: Long): Project?
