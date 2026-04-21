@@ -1,3 +1,4 @@
+import asyncio
 import json
 from typing import AsyncIterator
 from fastapi import APIRouter, Depends
@@ -8,6 +9,11 @@ from auth import require_auth
 from config import OLLAMA_URL, DEFAULT_MODEL
 
 router = APIRouter()
+
+# Seconds between SSE heartbeats while Ollama is silent (e.g. prompt processing
+# on CPU). Heartbeats are SSE comment lines (": hb\n\n"); clients discard them.
+# Keeps the socket alive across the app-side readTimeout.
+_HEARTBEAT_INTERVAL_S = 15.0
 
 
 class InferenceMessage(BaseModel):
@@ -52,7 +58,15 @@ async def _stream_ollama(req: InferenceRequest) -> AsyncIterator[str]:
             "POST", f"{OLLAMA_URL}/api/chat", json=body
         ) as response:
             response.raise_for_status()
-            async for line in response.aiter_lines():
+            it = response.aiter_lines()
+            while True:
+                try:
+                    line = await asyncio.wait_for(it.__anext__(), _HEARTBEAT_INTERVAL_S)
+                except asyncio.TimeoutError:
+                    yield ": hb\n\n"
+                    continue
+                except StopAsyncIteration:
+                    break
                 if not line:
                     continue
                 try:
