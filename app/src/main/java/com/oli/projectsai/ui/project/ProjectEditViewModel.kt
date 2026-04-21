@@ -48,6 +48,9 @@ class ProjectEditViewModel @Inject constructor(
     private val _isSecret = MutableStateFlow(false)
     val isSecret: StateFlow<Boolean> = _isSecret.asStateFlow()
 
+    private val _useRemoteBackend = MutableStateFlow(false)
+    val useRemoteBackend: StateFlow<Boolean> = _useRemoteBackend.asStateFlow()
+
     private val _contextTokenCount = MutableStateFlow(0)
     val contextTokenCount: StateFlow<Int> = _contextTokenCount.asStateFlow()
 
@@ -66,6 +69,7 @@ class ProjectEditViewModel @Inject constructor(
                     _memoryTokenLimit.value = p.memoryTokenLimit
                     _contextLength.value = p.contextLength
                     _isSecret.value = p.isSecret
+                    _useRemoteBackend.value = p.preferredBackend == com.oli.projectsai.data.db.entity.PreferredBackend.REMOTE
                 }
             }
         }
@@ -96,9 +100,17 @@ class ProjectEditViewModel @Inject constructor(
         _isSecret.value = value
     }
 
+    fun updateUseRemoteBackend(value: Boolean) {
+        _useRemoteBackend.value = value
+    }
+
     fun save() {
         viewModelScope.launch {
             val existing = existingProject
+            val backend = if (_useRemoteBackend.value)
+                com.oli.projectsai.data.db.entity.PreferredBackend.REMOTE
+            else
+                com.oli.projectsai.data.db.entity.PreferredBackend.LOCAL
             if (existing != null) {
                 projectRepository.updateProject(
                     existing.copy(
@@ -107,7 +119,8 @@ class ProjectEditViewModel @Inject constructor(
                         manualContext = _manualContext.value,
                         memoryTokenLimit = _memoryTokenLimit.value,
                         contextLength = _contextLength.value,
-                        isSecret = _isSecret.value
+                        isSecret = _isSecret.value,
+                        preferredBackend = backend
                     )
                 )
             } else {
@@ -118,7 +131,8 @@ class ProjectEditViewModel @Inject constructor(
                         manualContext = _manualContext.value,
                         memoryTokenLimit = _memoryTokenLimit.value,
                         contextLength = _contextLength.value,
-                        isSecret = _isSecret.value
+                        isSecret = _isSecret.value,
+                        preferredBackend = backend
                     )
                 )
             }

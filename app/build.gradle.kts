@@ -14,8 +14,8 @@ android {
         applicationId = "com.oli.projectsai"
         minSdk = 33
         targetSdk = 35
-        versionCode = 21
-        versionName = "1.10.0"
+        versionCode = 22
+        versionName = "2.1.0"
 }
 
     buildTypes {
@@ -87,4 +87,9 @@ dependencies {
     // Markdown rendering in chat (Compose-native CommonMark renderer)
     implementation("com.halilibo.compose-richtext:richtext-commonmark:0.20.0")
     implementation("com.halilibo.compose-richtext:richtext-ui-material3:0.20.0")
+
+    // WorkManager for background sync
+    implementation("androidx.work:work-runtime-ktx:2.10.0")
+    implementation("androidx.hilt:hilt-work:1.2.0")
+    ksp("androidx.hilt:hilt-compiler:1.2.0")
 }

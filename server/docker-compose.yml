@@ -1,0 +1,36 @@
+services:
+
+  app:
+    build: .
+    container_name: projects-ai-server
+    restart: unless-stopped
+    ports:
+      - "${HOST_PORT:-8765}:8000"
+    environment:
+      - API_TOKEN=${API_TOKEN}
+      - OLLAMA_URL=http://ollama:11434
+      - DATA_DIR=/data
+      - DEFAULT_MODEL=${DEFAULT_MODEL:-gemma3:4b-it-q4_K_M}
+    volumes:
+      - projects_data:/data
+    depends_on:
+      - ollama
+
+  ollama:
+    image: ollama/ollama:latest
+    container_name: projects-ai-ollama
+    restart: unless-stopped
+    volumes:
+      - ollama_models:/root/.ollama
+    # Uncomment for Nvidia GPU:
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [gpu]
+
+volumes:
+  projects_data:
+  ollama_models:

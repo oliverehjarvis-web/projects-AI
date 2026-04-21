@@ -25,8 +25,8 @@ sealed class ModelState {
 
 @Singleton
 class InferenceManager @Inject constructor(
-    private val localBackend: LocalMediaPipeBackend
-    // TODO: Add RemoteHttpBackend when implementing remote inference
+    private val localBackend: LocalMediaPipeBackend,
+    private val remoteBackend: RemoteHttpBackend
 ) {
     private val _modelState = MutableStateFlow<ModelState>(ModelState.Unloaded)
     val modelState: StateFlow<ModelState> = _modelState.asStateFlow()
@@ -45,8 +45,8 @@ class InferenceManager @Inject constructor(
         .stateIn(scope, SharingStarted.Eagerly, DEFAULT_CONTEXT_LENGTH)
 
     private val backends: Map<String, InferenceBackend> = mapOf(
-        localBackend.id to localBackend
-        // TODO: "remote_http" to remoteBackend
+        localBackend.id to localBackend,
+        remoteBackend.id to remoteBackend
     )
 
     fun getBackend(id: String): InferenceBackend? = backends[id]

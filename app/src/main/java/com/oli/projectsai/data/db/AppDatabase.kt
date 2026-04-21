@@ -16,7 +16,7 @@ import com.oli.projectsai.data.db.entity.*
         Message::class,
         QuickAction::class
     ],
-    version = 5,
+    version = 6,
     exportSchema = true
 )
 @TypeConverters(Converters::class)
@@ -58,6 +58,21 @@ abstract class AppDatabase : RoomDatabase() {
                 db.execSQL(
                     "ALTER TABLE projects ADD COLUMN isSecret INTEGER NOT NULL DEFAULT 0"
                 )
+            }
+        }
+
+        val MIGRATION_5_6 = object : Migration(5, 6) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE projects ADD COLUMN remoteId TEXT")
+                db.execSQL("ALTER TABLE projects ADD COLUMN deletedAt INTEGER")
+                db.execSQL("ALTER TABLE chats ADD COLUMN remoteId TEXT")
+                db.execSQL("ALTER TABLE chats ADD COLUMN deletedAt INTEGER")
+                db.execSQL("ALTER TABLE messages ADD COLUMN remoteId TEXT")
+                db.execSQL("ALTER TABLE messages ADD COLUMN updatedAt INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE messages ADD COLUMN deletedAt INTEGER")
+                db.execSQL("ALTER TABLE quick_actions ADD COLUMN remoteId TEXT")
+                db.execSQL("ALTER TABLE quick_actions ADD COLUMN updatedAt INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE quick_actions ADD COLUMN deletedAt INTEGER")
             }
         }
     }

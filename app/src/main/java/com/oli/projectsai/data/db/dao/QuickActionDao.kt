@@ -20,4 +20,13 @@ interface QuickActionDao {
 
     @Delete
     suspend fun delete(action: QuickAction)
+
+    @Query("SELECT * FROM quick_actions ORDER BY sortOrder ASC")
+    suspend fun getAllForSync(): List<QuickAction>
+
+    @Query("SELECT * FROM quick_actions WHERE remoteId = :remoteId LIMIT 1")
+    suspend fun getByRemoteId(remoteId: String): QuickAction?
+
+    @Query("UPDATE quick_actions SET remoteId = :remoteId WHERE id = :id")
+    suspend fun updateRemoteId(id: Long, remoteId: String)
 }

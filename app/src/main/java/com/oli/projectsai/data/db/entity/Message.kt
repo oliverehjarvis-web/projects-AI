@@ -27,5 +27,8 @@ data class Message(
     val tokenCount: Int = 0,
     val createdAt: Long = System.currentTimeMillis(),
     /** Absolute paths to image files in app-private storage, in display order. */
-    val attachmentPaths: List<String> = emptyList()
+    val attachmentPaths: List<String> = emptyList(),
+    val remoteId: String? = null,
+    val updatedAt: Long = System.currentTimeMillis(),
+    val deletedAt: Long? = null
 )

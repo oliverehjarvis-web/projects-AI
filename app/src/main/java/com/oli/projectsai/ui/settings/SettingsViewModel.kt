@@ -7,8 +7,11 @@ import androidx.core.content.FileProvider
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.oli.projectsai.BuildConfig
+import com.oli.projectsai.data.preferences.RemoteSettings
 import com.oli.projectsai.data.preferences.SearchDepth
 import com.oli.projectsai.data.preferences.SearchSettings
+import com.oli.projectsai.data.sync.SyncRepository
+import com.oli.projectsai.data.sync.SyncResult
 import com.oli.projectsai.data.update.UpdateChecker
 import com.oli.projectsai.data.update.UpdateInfo
 import com.oli.projectsai.inference.InferenceBackend
@@ -26,6 +29,13 @@ import kotlinx.coroutines.launch
 import java.io.File
 import javax.inject.Inject
 
+sealed class SyncState {
+    data object Idle : SyncState()
+    data object Syncing : SyncState()
+    data object Success : SyncState()
+    data class Error(val message: String) : SyncState()
+}
+
 sealed class UpdateState {
     data object Idle : UpdateState()
     data object Checking : UpdateState()
@@ -41,7 +51,9 @@ class SettingsViewModel @Inject constructor(
     @ApplicationContext private val context: Context,
     private val inferenceManager: InferenceManager,
     private val updateChecker: UpdateChecker,
-    private val searchSettings: SearchSettings
+    private val searchSettings: SearchSettings,
+    private val remoteSettings: RemoteSettings,
+    private val syncRepository: SyncRepository
 ) : ViewModel() {
 
     companion object {
@@ -69,6 +81,65 @@ class SettingsViewModel @Inject constructor(
     fun setSearchDepth(value: SearchDepth) {
         viewModelScope.launch { searchSettings.setSearchDepth(value) }
     }
+
+    val serverUrl: StateFlow<String> = remoteSettings.serverUrl.stateIn(
+        viewModelScope, SharingStarted.Eagerly, ""
+    )
+    val apiToken: StateFlow<String> = remoteSettings.apiToken.stateIn(
+        viewModelScope, SharingStarted.Eagerly, ""
+    )
+    val remoteModel: StateFlow<String> = remoteSettings.defaultModel.stateIn(
+        viewModelScope, SharingStarted.Eagerly, ""
+    )
+
+    private val _syncState = MutableStateFlow<SyncState>(SyncState.Idle)
+    val syncState: StateFlow<SyncState> = _syncState.asStateFlow()
+
+    fun saveRemoteSettings(url: String, token: String, model: String) {
+        viewModelScope.launch {
+            remoteSettings.setServerUrl(url)
+            remoteSettings.setApiToken(token)
+            remoteSettings.setDefaultModel(model)
+        }
+    }
+
+    fun testConnection(url: String, token: String, onResult: (Boolean, String) -> Unit) {
+        viewModelScope.launch {
+            try {
+                remoteSettings.setServerUrl(url)
+                remoteSettings.setApiToken(token)
+                val remoteBackend = inferenceManager.getBackend("remote_http")
+                if (remoteBackend == null) {
+                    onResult(false, "Remote backend unavailable")
+                    return@launch
+                }
+                remoteBackend.loadModel(
+                    com.oli.projectsai.inference.ModelInfo(
+                        name = "remote",
+                        precision = com.oli.projectsai.inference.ModelPrecision.Q4,
+                        filePath = ""
+                    )
+                )
+                onResult(true, "Connected")
+            } catch (t: Throwable) {
+                onResult(false, t.message ?: "Connection failed")
+            }
+        }
+    }
+
+    fun syncNow() {
+        if (_syncState.value is SyncState.Syncing) return
+        _syncState.value = SyncState.Syncing
+        viewModelScope.launch {
+            _syncState.value = when (val result = syncRepository.syncNow()) {
+                is SyncResult.Success -> SyncState.Success
+                is SyncResult.Skipped -> SyncState.Idle
+                is SyncResult.Error -> SyncState.Error(result.message)
+            }
+        }
+    }
+
+    fun dismissSyncState() { _syncState.value = SyncState.Idle }
 
     private val _updateState = MutableStateFlow<UpdateState>(UpdateState.Idle)
     val updateState: StateFlow<UpdateState> = _updateState.asStateFlow()

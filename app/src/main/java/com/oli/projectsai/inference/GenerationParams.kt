@@ -6,5 +6,6 @@ data class GenerationParams(
     val currentAttachments: List<String>,
     val systemPrompt: String,
     val webSearchEnabled: Boolean,
-    val chatTitleHint: String
+    val chatTitleHint: String,
+    val backendId: String? = null
 )

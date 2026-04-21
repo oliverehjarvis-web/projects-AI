@@ -179,10 +179,13 @@ class ChatViewModel @Inject constructor(
     }
 
     private var contextProjectId: Long = -1L
+    @Volatile private var preferredBackendId: String? = null
 
     private suspend fun loadProjectContext(pid: Long) {
         contextProjectId = pid
         val project = projectRepository.getProject(pid) ?: return
+        preferredBackendId = if (project.preferredBackend == com.oli.projectsai.data.db.entity.PreferredBackend.REMOTE)
+            "remote_http" else null
         val name = globalContextStore.name.first()
         val rules = globalContextStore.rules.first()
         systemPrompt = buildSystemPrompt(name, rules, project.manualContext, project.accumulatedMemory)
@@ -320,7 +323,8 @@ class ChatViewModel @Inject constructor(
             currentAttachments = currentAttachments,
             systemPrompt = systemPrompt,
             webSearchEnabled = _webSearchEnabled.value,
-            chatTitleHint = titleHint
+            chatTitleHint = titleHint,
+            backendId = preferredBackendId
         )
         val started = generationController.start(params)
         if (started) {

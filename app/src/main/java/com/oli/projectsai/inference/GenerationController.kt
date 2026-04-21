@@ -133,9 +133,9 @@ class GenerationController @Inject constructor(
             }.joinToString("\n\n")
 
             cancelled = when (depth.takeIf { params.webSearchEnabled }) {
-                SearchDepth.TOOL_LOOP -> runToolLoop(chatMessages, effectiveSystemPrompt, fullResponse)
-                SearchDepth.AUTO_FETCH -> runAutoFetch(chatMessages, effectiveSystemPrompt, fullResponse)
-                null -> runSingleTurn(chatMessages, effectiveSystemPrompt, fullResponse)
+                SearchDepth.TOOL_LOOP -> runToolLoop(chatMessages, effectiveSystemPrompt, fullResponse, params.backendId)
+                SearchDepth.AUTO_FETCH -> runAutoFetch(chatMessages, effectiveSystemPrompt, fullResponse, params.backendId)
+                null -> runSingleTurn(chatMessages, effectiveSystemPrompt, fullResponse, params.backendId)
             }
         } catch (ie: InferenceError) {
             lastFailed[chatId] = LastFailed(params.currentUserContent, params.currentAttachments)
@@ -180,13 +180,15 @@ class GenerationController @Inject constructor(
     private suspend fun runSingleTurn(
         chatMessages: List<ChatMessage>,
         systemPromptText: String,
-        fullResponse: StringBuilder
+        fullResponse: StringBuilder,
+        backendId: String? = null
     ): Boolean {
         return try {
             inferenceManager.generate(
                 systemPrompt = systemPromptText,
                 messages = chatMessages,
-                config = GenerationConfig()
+                config = GenerationConfig(),
+                backendId = backendId
             ).collect { token ->
                 fullResponse.append(token)
                 updateStreaming(fullResponse.toString())
@@ -198,14 +200,16 @@ class GenerationController @Inject constructor(
     private suspend fun runAutoFetch(
         chatMessages: List<ChatMessage>,
         systemPromptText: String,
-        fullResponse: StringBuilder
+        fullResponse: StringBuilder,
+        backendId: String? = null
     ): Boolean {
         val firstBuf = StringBuilder()
         var cancelled = try {
             inferenceManager.generate(
                 systemPrompt = systemPromptText,
                 messages = chatMessages,
-                config = GenerationConfig()
+                config = GenerationConfig(),
+                backendId = backendId
             ).collect { token ->
                 firstBuf.append(token)
                 updateStreaming(stripToolTags(firstBuf.toString()))
@@ -255,7 +259,8 @@ class GenerationController @Inject constructor(
             inferenceManager.generate(
                 systemPrompt = systemPromptText,
                 messages = continuation,
-                config = GenerationConfig()
+                config = GenerationConfig(),
+                backendId = backendId
             ).collect { token ->
                 fullResponse.append(token)
                 updateStreaming(fullResponse.toString())
@@ -268,7 +273,8 @@ class GenerationController @Inject constructor(
     private suspend fun runToolLoop(
         chatMessages: List<ChatMessage>,
         systemPromptText: String,
-        fullResponse: StringBuilder
+        fullResponse: StringBuilder,
+        backendId: String? = null
     ): Boolean {
         var conversation = chatMessages
         repeat(TOOL_LOOP_MAX_ROUNDS) { round ->
@@ -277,7 +283,8 @@ class GenerationController @Inject constructor(
                 inferenceManager.generate(
                     systemPrompt = systemPromptText,
                     messages = conversation,
-                    config = GenerationConfig()
+                    config = GenerationConfig(),
+                    backendId = backendId
                 ).collect { token ->
                     buf.append(token)
                     updateStreaming(stripToolTags(buf.toString()))

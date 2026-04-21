@@ -29,4 +29,13 @@ interface ChatDao {
 
     @Query("UPDATE chats SET webSearchEnabled = :enabled WHERE id = :chatId")
     suspend fun updateWebSearchEnabled(chatId: Long, enabled: Boolean)
+
+    @Query("SELECT * FROM chats ORDER BY updatedAt DESC")
+    suspend fun getAllForSync(): List<Chat>
+
+    @Query("SELECT * FROM chats WHERE remoteId = :remoteId LIMIT 1")
+    suspend fun getByRemoteId(remoteId: String): Chat?
+
+    @Query("UPDATE chats SET remoteId = :remoteId WHERE id = :id")
+    suspend fun updateRemoteId(id: Long, remoteId: String)
 }

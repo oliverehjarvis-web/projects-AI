@@ -23,4 +23,13 @@ interface MessageDao {
 
     @Query("DELETE FROM messages WHERE chatId = :chatId")
     suspend fun deleteByChat(chatId: Long)
+
+    @Query("SELECT * FROM messages ORDER BY createdAt ASC")
+    suspend fun getAllForSync(): List<Message>
+
+    @Query("SELECT * FROM messages WHERE remoteId = :remoteId LIMIT 1")
+    suspend fun getByRemoteId(remoteId: String): Message?
+
+    @Query("UPDATE messages SET remoteId = :remoteId WHERE id = :id")
+    suspend fun updateRemoteId(id: Long, remoteId: String)
 }

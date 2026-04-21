@@ -36,6 +36,10 @@ fun SettingsScreen(
     val updateState by viewModel.updateState.collectAsStateWithLifecycle()
     val searxngUrl by viewModel.searxngUrl.collectAsStateWithLifecycle()
     val searchDepth by viewModel.searchDepth.collectAsStateWithLifecycle()
+    val serverUrl by viewModel.serverUrl.collectAsStateWithLifecycle()
+    val apiToken by viewModel.apiToken.collectAsStateWithLifecycle()
+    val remoteModel by viewModel.remoteModel.collectAsStateWithLifecycle()
+    val syncState by viewModel.syncState.collectAsStateWithLifecycle()
 
     // Auto-launch installer when APK is ready
     val currentUpdateState = updateState
@@ -117,6 +121,28 @@ fun SettingsScreen(
             SearchDepthSelector(
                 current = searchDepth,
                 onSelect = { viewModel.setSearchDepth(it) }
+            )
+
+            HorizontalDivider()
+
+            HorizontalDivider()
+
+            // Remote server section
+            Text(
+                "Remote server",
+                style = MaterialTheme.typography.titleSmall,
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)
+            )
+
+            RemoteServerSection(
+                serverUrl = serverUrl,
+                apiToken = apiToken,
+                remoteModel = remoteModel,
+                syncState = syncState,
+                onSave = { url, token, model -> viewModel.saveRemoteSettings(url, token, model) },
+                onTest = { url, token, onResult -> viewModel.testConnection(url, token, onResult) },
+                onSync = { viewModel.syncNow() },
+                onDismissSync = { viewModel.dismissSyncState() }
             )
 
             HorizontalDivider()
@@ -385,6 +411,100 @@ private fun SearchDepthSelector(
             subtitle = "Model can search, then pick specific URLs to read in full. Slower and can loop; more flexible.",
             onClick = { onSelect(SearchDepth.TOOL_LOOP) }
         )
+    }
+}
+
+@Composable
+private fun RemoteServerSection(
+    serverUrl: String,
+    apiToken: String,
+    remoteModel: String,
+    syncState: SyncState,
+    onSave: (String, String, String) -> Unit,
+    onTest: (String, String, (Boolean, String) -> Unit) -> Unit,
+    onSync: () -> Unit,
+    onDismissSync: () -> Unit
+) {
+    var draftUrl by remember(serverUrl) { mutableStateOf(serverUrl) }
+    var draftToken by remember(apiToken) { mutableStateOf(apiToken) }
+    var draftModel by remember(remoteModel) { mutableStateOf(remoteModel) }
+    var testResult by remember { mutableStateOf<Pair<Boolean, String>?>(null) }
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 4.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        Text(
+            "Point at your Projects AI Docker server to enable remote AI inference and data sync.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        OutlinedTextField(
+            value = draftUrl,
+            onValueChange = { draftUrl = it },
+            modifier = Modifier.fillMaxWidth(),
+            label = { Text("Server URL") },
+            placeholder = { Text("http://100.x.x.x:8765") },
+            singleLine = true
+        )
+        OutlinedTextField(
+            value = draftToken,
+            onValueChange = { draftToken = it },
+            modifier = Modifier.fillMaxWidth(),
+            label = { Text("API token") },
+            singleLine = true,
+            visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation()
+        )
+        OutlinedTextField(
+            value = draftModel,
+            onValueChange = { draftModel = it },
+            modifier = Modifier.fillMaxWidth(),
+            label = { Text("Model name") },
+            placeholder = { Text("gemma3:4b-it-q4_K_M") },
+            singleLine = true
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Button(onClick = {
+                onSave(draftUrl, draftToken, draftModel)
+                testResult = null
+                onTest(draftUrl, draftToken) { ok, msg -> testResult = ok to msg }
+            }) { Text("Save & Test") }
+            OutlinedButton(
+                onClick = onSync,
+                enabled = syncState !is SyncState.Syncing
+            ) {
+                if (syncState is SyncState.Syncing) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(16.dp),
+                        strokeWidth = 2.dp
+                    )
+                } else {
+                    Text("Sync now")
+                }
+            }
+        }
+        testResult?.let { (ok, msg) ->
+            Text(
+                msg,
+                style = MaterialTheme.typography.labelSmall,
+                color = if (ok) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error
+            )
+        }
+        when (syncState) {
+            is SyncState.Success -> Text(
+                "Sync complete",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.primary
+            )
+            is SyncState.Error -> Text(
+                "Sync failed: ${syncState.message}",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.error
+            )
+            else -> Unit
+        }
     }
 }
 

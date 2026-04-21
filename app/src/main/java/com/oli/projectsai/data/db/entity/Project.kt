@@ -3,7 +3,6 @@ package com.oli.projectsai.data.db.entity
 import androidx.room.Entity
 import androidx.room.PrimaryKey
 
-@Deprecated("Reserved for future multi-backend support — not currently branched on in the UI.")
 enum class PreferredBackend { LOCAL, REMOTE }
 
 @Entity(tableName = "projects")
@@ -19,5 +18,7 @@ data class Project(
     val contextLength: Int = 16384,
     val isSecret: Boolean = false,
     val createdAt: Long = System.currentTimeMillis(),
-    val updatedAt: Long = System.currentTimeMillis()
+    val updatedAt: Long = System.currentTimeMillis(),
+    val remoteId: String? = null,
+    val deletedAt: Long? = null
 )

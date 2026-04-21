@@ -29,6 +29,7 @@ fun ProjectEditScreen(
     val contextOptions = viewModel.contextLengthOptions
     val isSecret by viewModel.isSecret.collectAsStateWithLifecycle()
     val canTogglePrivate by viewModel.canTogglePrivate.collectAsStateWithLifecycle()
+    val useRemoteBackend by viewModel.useRemoteBackend.collectAsStateWithLifecycle()
 
     Scaffold(
         topBar = {
@@ -145,6 +146,26 @@ fun ProjectEditScreen(
                         else MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
+            }
+
+            HorizontalDivider()
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = androidx.compose.ui.Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("Use remote backend", style = MaterialTheme.typography.titleSmall)
+                    Text(
+                        "Run AI inference on your Docker server instead of on this device.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Switch(
+                    checked = useRemoteBackend,
+                    onCheckedChange = { viewModel.updateUseRemoteBackend(it) }
+                )
             }
 
             if (canTogglePrivate) {

@@ -35,4 +35,13 @@ interface ProjectDao {
 
     @Query("UPDATE projects SET pinnedMemories = :pinned, updatedAt = :now WHERE id = :projectId")
     suspend fun updatePinnedMemories(projectId: Long, pinned: List<String>, now: Long = System.currentTimeMillis())
+
+    @Query("SELECT * FROM projects ORDER BY updatedAt DESC")
+    suspend fun getAllForSync(): List<Project>
+
+    @Query("SELECT * FROM projects WHERE remoteId = :remoteId LIMIT 1")
+    suspend fun getByRemoteId(remoteId: String): Project?
+
+    @Query("UPDATE projects SET remoteId = :remoteId WHERE id = :id")
+    suspend fun updateRemoteId(id: Long, remoteId: String)
 }
