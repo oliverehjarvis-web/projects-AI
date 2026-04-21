@@ -11,26 +11,27 @@ router = APIRouter()
 # Ollama will error gracefully if a tag doesn't exist yet.
 CATALOGUE = [
     # ── Gemma 4 ────────────────────────────────────────────────────────────
-    {"id": "gemma4:2b",  "family": "Gemma 4",  "label": "Gemma 4 E2B",  "size_gb": 1.9,  "notes": "Fastest · good for most tasks"},
-    {"id": "gemma4:9b",  "family": "Gemma 4",  "label": "Gemma 4 9B",   "size_gb": 5.8,  "notes": "Balanced speed & quality"},
-    {"id": "gemma4:27b", "family": "Gemma 4",  "label": "Gemma 4 27B",  "size_gb": 17.0, "notes": "Best quality · GPU recommended"},
+    {"id": "gemma4:e2b",  "family": "Gemma 4",  "label": "Gemma 4 E2B",  "size_gb": 7.2,  "notes": "Fastest · 128K context · multimodal"},
+    {"id": "gemma4:e4b",  "family": "Gemma 4",  "label": "Gemma 4 E4B",  "size_gb": 9.6,  "notes": "Balanced · 128K context · multimodal"},
+    {"id": "gemma4:26b",  "family": "Gemma 4",  "label": "Gemma 4 26B",  "size_gb": 18.0, "notes": "High quality · 256K context · GPU recommended"},
+    {"id": "gemma4:31b",  "family": "Gemma 4",  "label": "Gemma 4 31B",  "size_gb": 20.0, "notes": "Best Gemma 4 · 256K context · GPU recommended"},
     # ── Gemma 3 ────────────────────────────────────────────────────────────
-    {"id": "gemma3:1b",  "family": "Gemma 3",  "label": "Gemma 3 1B",   "size_gb": 0.8,  "notes": "Ultra-fast · limited quality"},
-    {"id": "gemma3:4b",  "family": "Gemma 3",  "label": "Gemma 3 4B",   "size_gb": 2.5,  "notes": "Fast · great quality/size ratio"},
-    {"id": "gemma3:12b", "family": "Gemma 3",  "label": "Gemma 3 12B",  "size_gb": 7.8,  "notes": "High quality"},
-    {"id": "gemma3:27b", "family": "Gemma 3",  "label": "Gemma 3 27B",  "size_gb": 17.0, "notes": "Best Gemma 3 · GPU recommended"},
+    {"id": "gemma3:1b",   "family": "Gemma 3",  "label": "Gemma 3 1B",   "size_gb": 0.8,  "notes": "Ultra-fast · limited quality"},
+    {"id": "gemma3:4b",   "family": "Gemma 3",  "label": "Gemma 3 4B",   "size_gb": 3.3,  "notes": "Fast · great quality/size ratio · multimodal"},
+    {"id": "gemma3:12b",  "family": "Gemma 3",  "label": "Gemma 3 12B",  "size_gb": 8.1,  "notes": "High quality · multimodal"},
+    {"id": "gemma3:27b",  "family": "Gemma 3",  "label": "Gemma 3 27B",  "size_gb": 17.0, "notes": "Best Gemma 3 · GPU recommended"},
     # ── Llama ──────────────────────────────────────────────────────────────
     {"id": "llama3.2:3b",  "family": "Llama",  "label": "Llama 3.2 3B",  "size_gb": 2.0,  "notes": "Fast general assistant"},
     {"id": "llama3.1:8b",  "family": "Llama",  "label": "Llama 3.1 8B",  "size_gb": 4.9,  "notes": "Strong reasoning"},
     {"id": "llama3.3:70b", "family": "Llama",  "label": "Llama 3.3 70B", "size_gb": 43.0, "notes": "Flagship · GPU required"},
     # ── Mistral ────────────────────────────────────────────────────────────
-    {"id": "mistral:7b",         "family": "Mistral", "label": "Mistral 7B",          "size_gb": 4.5,  "notes": "Fast & capable"},
-    {"id": "mistral-nemo:12b",   "family": "Mistral", "label": "Mistral Nemo 12B",    "size_gb": 7.5,  "notes": "Great instruction following"},
+    {"id": "mistral:7b",        "family": "Mistral", "label": "Mistral 7B",       "size_gb": 4.5, "notes": "Fast & capable"},
+    {"id": "mistral-nemo:12b",  "family": "Mistral", "label": "Mistral Nemo 12B", "size_gb": 7.5, "notes": "Great instruction following"},
     # ── Qwen ───────────────────────────────────────────────────────────────
-    {"id": "qwen2.5:7b",  "family": "Qwen",   "label": "Qwen 2.5 7B",   "size_gb": 4.7,  "notes": "Strong at coding & math"},
-    {"id": "qwen2.5:32b", "family": "Qwen",   "label": "Qwen 2.5 32B",  "size_gb": 20.0, "notes": "Top tier · GPU recommended"},
+    {"id": "qwen3:8b",   "family": "Qwen",   "label": "Qwen 3 8B",    "size_gb": 5.2,  "notes": "Strong at coding & math"},
+    {"id": "qwen3:32b",  "family": "Qwen",   "label": "Qwen 3 32B",   "size_gb": 20.0, "notes": "Top tier · GPU recommended"},
     # ── Phi ────────────────────────────────────────────────────────────────
-    {"id": "phi4:14b",    "family": "Phi",    "label": "Phi 4 14B",      "size_gb": 9.0,  "notes": "Microsoft · strong reasoning"},
+    {"id": "phi4:14b",   "family": "Phi",    "label": "Phi 4 14B",    "size_gb": 9.0,  "notes": "Microsoft · strong reasoning"},
 ]
 
 
