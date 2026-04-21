@@ -12,7 +12,11 @@ data class ChatMessage(
 )
 
 data class GenerationConfig(
-    val maxOutputTokens: Int = 2048,
+    // Thinking models (gemma4:26b, QwQ, DeepSeek-R1) can burn several thousand
+    // tokens on chain-of-thought before emitting the answer. 2048 was too tight
+    // and left simple prompts answerless. Ollama caps num_predict to context
+    // length anyway, so 8192 is safe and leaves room for both thinking + reply.
+    val maxOutputTokens: Int = 8192,
     val temperature: Float = 0.7f,
     val topK: Int = 40,
     val topP: Float = 0.95f,

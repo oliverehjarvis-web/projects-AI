@@ -9,6 +9,7 @@ import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
@@ -644,9 +645,10 @@ private fun MessageBubble(
                             color = MaterialTheme.colorScheme.onPrimaryContainer
                         )
                     } else {
-                        RichText {
-                            Markdown(content = message.content)
-                        }
+                        ThinkAwareMarkdown(
+                            content = message.content,
+                            isStreaming = false
+                        )
                     }
                 }
             }
@@ -681,13 +683,108 @@ private fun StreamingBubble(content: String) {
             ),
             modifier = Modifier.fillMaxWidth(0.85f)
         ) {
-            // Render streaming tokens as markdown so the layout doesn't visibly reflow
-            // when the final message replaces this bubble on completion.
             Column(modifier = Modifier.padding(12.dp)) {
-                RichText {
-                    Markdown(content = content)
+                ThinkAwareMarkdown(content = content, isStreaming = true)
+            }
+        }
+    }
+}
+
+/**
+ * Renders assistant content, splitting any `<think>…</think>` blocks into
+ * collapsible cards so the chain-of-thought doesn't crowd the main answer.
+ * While streaming, the last think block stays expanded so the user sees the
+ * model work; once the message is finalised, thinking collapses by default.
+ */
+@Composable
+private fun ThinkAwareMarkdown(content: String, isStreaming: Boolean) {
+    val segments = remember(content) { parseThinkSegments(content) }
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        segments.forEachIndexed { index, seg ->
+            if (seg.isThinking) {
+                val isLast = index == segments.lastIndex
+                ThinkingBlock(
+                    text = seg.text,
+                    // While streaming, keep the currently-growing think block open.
+                    initiallyExpanded = isStreaming && isLast && !seg.closed
+                )
+            } else if (seg.text.isNotBlank()) {
+                RichText { Markdown(content = seg.text) }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ThinkingBlock(text: String, initiallyExpanded: Boolean) {
+    var expanded by remember { mutableStateOf(initiallyExpanded) }
+    Card(
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surface
+        ),
+        border = androidx.compose.foundation.BorderStroke(
+            1.dp, MaterialTheme.colorScheme.outlineVariant
+        ),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { expanded = !expanded }
+                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Icon(
+                    Icons.Default.Psychology,
+                    contentDescription = null,
+                    modifier = Modifier.size(16.dp),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Text(
+                    text = if (expanded) "Hide thinking" else "Show thinking",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.weight(1f)
+                )
+                Icon(
+                    if (expanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            if (expanded) {
+                Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
+                    Text(
+                        text = text.trim(),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
                 }
             }
         }
     }
+}
+
+private data class ThinkSegment(val isThinking: Boolean, val text: String, val closed: Boolean)
+
+private fun parseThinkSegments(content: String): List<ThinkSegment> {
+    if (!content.contains("<think>")) return listOf(ThinkSegment(false, content, true))
+    val out = mutableListOf<ThinkSegment>()
+    val pattern = Regex("<think>([\\s\\S]*?)(</think>|$)")
+    var cursor = 0
+    for (m in pattern.findAll(content)) {
+        if (m.range.first > cursor) {
+            out += ThinkSegment(false, content.substring(cursor, m.range.first), true)
+        }
+        val inner = m.groupValues[1]
+        val closed = m.groupValues[2] == "</think>"
+        out += ThinkSegment(true, inner, closed)
+        cursor = m.range.last + 1
+    }
+    if (cursor < content.length) {
+        out += ThinkSegment(false, content.substring(cursor), true)
+    }
+    return out
 }
