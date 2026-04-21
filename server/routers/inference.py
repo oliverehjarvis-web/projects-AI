@@ -43,10 +43,26 @@ class InferenceRequest(BaseModel):
     config: InferenceConfig = InferenceConfig()
 
 
+# Prefix prepended to every system prompt so thinking-capable models don't
+# re-evaluate persistent project context for trivial prompts. Keep this short —
+# long system prompts themselves provoke longer reasoning on some models.
+_REASONING_PREAMBLE = (
+    "Match the depth of your reasoning to the complexity of the user's request. "
+    "For simple greetings, one-word answers, or short factual replies, respond "
+    "directly with little or no internal deliberation. "
+    "Treat the project instructions and memory below as persistent background "
+    "preferences — apply them naturally, do not re-analyse them on every turn."
+)
+
+
 async def _stream_ollama(req: InferenceRequest) -> AsyncIterator[str]:
     ollama_messages = []
-    if req.system_prompt:
-        ollama_messages.append({"role": "system", "content": req.system_prompt})
+    system_prompt = req.system_prompt.strip()
+    combined_system = (
+        f"{_REASONING_PREAMBLE}\n\n---\n{system_prompt}"
+        if system_prompt else _REASONING_PREAMBLE
+    )
+    ollama_messages.append({"role": "system", "content": combined_system})
     for m in req.messages:
         role = "assistant" if m.role == "model" else m.role
         ollama_messages.append({"role": role, "content": m.content})
