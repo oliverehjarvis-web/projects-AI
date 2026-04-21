@@ -247,7 +247,7 @@ class GenerationController @Inject constructor(
         updateSearchStatus(null)
 
         val continuation = chatMessages + listOf(
-            ChatMessage(role = "model", content = "<search>$query</search>"),
+            ChatMessage(role = "assistant", content = "<search>$query</search>"),
             ChatMessage(
                 role = "user",
                 content = "$enriched\n\nUse these to answer my previous question. " +
@@ -337,7 +337,7 @@ class GenerationController @Inject constructor(
             else ""
 
             conversation = conversation + listOf(
-                ChatMessage(role = "model", content = firstTool.value),
+                ChatMessage(role = "assistant", content = firstTool.value),
                 ChatMessage(role = "user", content = toolResultText + closingHint)
             )
             updateStreaming("")
@@ -348,7 +348,7 @@ class GenerationController @Inject constructor(
 
 private fun MessageRole.toWireRole(): String = when (this) {
     MessageRole.USER -> "user"
-    MessageRole.ASSISTANT -> "model"
+    MessageRole.ASSISTANT -> "assistant"
     MessageRole.SYSTEM -> "system"
 }
 

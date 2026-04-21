@@ -5,7 +5,7 @@ import com.oli.projectsai.R
 import kotlinx.coroutines.flow.Flow
 
 data class ChatMessage(
-    val role: String, // "user", "model", "system"
+    val role: String, // "user", "assistant", "system"
     val content: String,
     /** Raw image bytes attached to this turn (only honoured on the final user message). */
     val imageBytes: List<ByteArray> = emptyList()

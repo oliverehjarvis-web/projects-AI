@@ -322,7 +322,7 @@ class SyncRepository @Inject constructor(
             setRequestProperty("Authorization", "Bearer $token")
         }
         return try {
-            check(conn.responseCode == 200) { "GET $url → HTTP ${conn.responseCode}" }
+            if (conn.responseCode != 200) throw serverError("GET", url, conn)
             JSONObject(conn.inputStream.bufferedReader().readText())
         } finally {
             conn.disconnect()
@@ -340,10 +340,21 @@ class SyncRepository @Inject constructor(
         }
         return try {
             OutputStreamWriter(conn.outputStream).use { it.write(body.toString()) }
-            check(conn.responseCode == 200) { "PUT $url → HTTP ${conn.responseCode}" }
+            if (conn.responseCode != 200) throw serverError("PUT", url, conn)
             JSONObject(conn.inputStream.bufferedReader().readText())
         } finally {
             conn.disconnect()
         }
+    }
+
+    private fun serverError(method: String, url: String, conn: HttpURLConnection): IllegalStateException {
+        val code = conn.responseCode
+        val detail = runCatching {
+            val raw = conn.errorStream?.bufferedReader()?.use { it.readText() }.orEmpty()
+            if (raw.isBlank()) null
+            else runCatching { JSONObject(raw).optString("error").ifBlank { raw } }.getOrDefault(raw)
+        }.getOrNull()
+        val suffix = detail?.takeIf { it.isNotBlank() }?.let { " — ${it.take(200)}" }.orEmpty()
+        return IllegalStateException("$method $url → HTTP $code$suffix")
     }
 }

@@ -27,6 +27,9 @@ class RemoteHttpBackend @Inject constructor(
 
     companion object {
         private const val CHARS_PER_TOKEN = 4.0f
+        // SSE idle timeout: tokens normally arrive every few hundred ms; a 60s gap indicates the
+        // server (or a proxy) has hung without closing the stream.
+        private const val STREAM_IDLE_TIMEOUT_MS = 60_000
     }
 
     // Singleton — scope lives for the process lifetime.
@@ -120,7 +123,9 @@ class RemoteHttpBackend @Inject constructor(
             val conn = (URL("$url/v1/generate").openConnection() as HttpURLConnection).apply {
                 requestMethod = "POST"
                 connectTimeout = 15_000
-                readTimeout = 0  // infinite: stream stays open until [DONE]
+                // Idle timeout per read — a stalled stream raises SocketTimeoutException instead of
+                // hanging the client forever.
+                readTimeout = STREAM_IDLE_TIMEOUT_MS
                 doOutput = true
                 setRequestProperty("Content-Type", "application/json")
                 setRequestProperty("Accept", "text/event-stream")
@@ -149,6 +154,10 @@ class RemoteHttpBackend @Inject constructor(
                 }
             } catch (ie: InferenceError) {
                 throw ie
+            } catch (t: java.net.SocketTimeoutException) {
+                throw InferenceError.GenerationFailed(
+                    IllegalStateException("Remote server stopped responding (no data for ${STREAM_IDLE_TIMEOUT_MS / 1000}s).")
+                )
             } catch (t: Throwable) {
                 throw InferenceError.GenerationFailed(t)
             } finally {
