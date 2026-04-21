@@ -51,7 +51,7 @@ const s: Record<string, React.CSSProperties> = {
   familyHeader: { fontSize: 12, fontWeight: 600, color: "#555", marginTop: 16, marginBottom: 6 },
 };
 
-interface PullState { status: string; pct: number | null }
+interface PullState { status: string; pct: number | null; error?: string }
 
 export default function Settings() {
   const { model, setModel } = useStore();
@@ -93,6 +93,8 @@ export default function Settings() {
 
   const handlePull = async (modelId: string) => {
     setPulling((p) => ({ ...p, [modelId]: { status: "Starting…", pct: null } }));
+    const clearAfterDelay = (id: string) =>
+      setTimeout(() => setPulling((p) => { const n = { ...p }; delete n[id]; return n; }), 4000);
     try {
       await pullModel(
         modelId,
@@ -100,10 +102,15 @@ export default function Settings() {
         () => {
           setPulling((p) => { const n = { ...p }; delete n[modelId]; return n; });
           loadModels();
+        },
+        (error) => {
+          setPulling((p) => ({ ...p, [modelId]: { status: "Error", pct: null, error } }));
+          clearAfterDelay(modelId);
         }
       );
-    } catch {
-      setPulling((p) => { const n = { ...p }; delete n[modelId]; return n; });
+    } catch (e) {
+      setPulling((p) => ({ ...p, [modelId]: { status: "Error", pct: null, error: String(e) } }));
+      clearAfterDelay(modelId);
     }
   };
 
@@ -203,19 +210,27 @@ export default function Settings() {
                           onClick={() => !pullState && handlePull(m.id)}
                           disabled={!!pullState}
                         >
-                          {pullState ? "Downloading…" : "Download"}
+                          {pullState ? (pullState.error ? "Failed" : "Downloading…") : "Download"}
                         </button>
                       )}
                     </div>
                   </div>
                   {pullState && (
                     <div>
-                      <div style={s.progressBar}>
-                        <div style={{ ...s.progressFill, width: `${pullState.pct ?? 0}%` }} />
-                      </div>
-                      <div style={{ fontSize: 11, color: "#555", marginTop: 4 }}>
-                        {pullState.status}{pullState.pct != null ? ` — ${pullState.pct}%` : ""}
-                      </div>
+                      {pullState.error ? (
+                        <div style={{ fontSize: 11, color: "#f44336", marginTop: 6 }}>
+                          {pullState.error}
+                        </div>
+                      ) : (
+                        <>
+                          <div style={s.progressBar}>
+                            <div style={{ ...s.progressFill, width: `${pullState.pct ?? 0}%` }} />
+                          </div>
+                          <div style={{ fontSize: 11, color: "#555", marginTop: 4 }}>
+                            {pullState.status}{pullState.pct != null ? ` — ${pullState.pct}%` : ""}
+                          </div>
+                        </>
+                      )}
                     </div>
                   )}
                 </div>

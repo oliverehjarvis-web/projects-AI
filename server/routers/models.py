@@ -71,21 +71,28 @@ async def delete_model(model_name: str, _: None = Depends(require_auth)):
 
 
 async def _pull_stream(model_name: str):
-    async with httpx.AsyncClient(timeout=None) as client:
-        async with client.stream("POST", f"{OLLAMA_URL}/api/pull",
-                                 json={"name": model_name}) as r:
-            async for line in r.aiter_lines():
-                if not line:
-                    continue
-                try:
-                    data = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                status = data.get("status", "")
-                total = data.get("total", 0)
-                completed = data.get("completed", 0)
-                progress = round(completed / total * 100) if total else None
-                yield f"data: {json.dumps({'status': status, 'progress': progress})}\n\n"
+    try:
+        async with httpx.AsyncClient(timeout=None) as client:
+            async with client.stream("POST", f"{OLLAMA_URL}/api/pull",
+                                     json={"name": model_name}) as r:
+                async for line in r.aiter_lines():
+                    if not line:
+                        continue
+                    try:
+                        data = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    if "error" in data:
+                        yield f"data: {json.dumps({'status': 'error', 'error': data['error'], 'progress': None})}\n\n"
+                        return
+                    status = data.get("status", "")
+                    total = data.get("total", 0)
+                    completed = data.get("completed", 0)
+                    progress = round(completed / total * 100) if total else None
+                    yield f"data: {json.dumps({'status': status, 'progress': progress})}\n\n"
+    except Exception as exc:
+        yield f"data: {json.dumps({'status': 'error', 'error': str(exc), 'progress': None})}\n\n"
+        return
     yield "data: {\"status\": \"done\", \"progress\": 100}\n\n"
 
 
