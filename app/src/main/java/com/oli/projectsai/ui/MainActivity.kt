@@ -12,16 +12,25 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Modifier
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.lifecycleScope
+import androidx.lifecycle.repeatOnLifecycle
 import androidx.navigation.compose.rememberNavController
+import com.oli.projectsai.data.sync.SyncRepository
 import com.oli.projectsai.inference.EXTRA_OPEN_CHAT_ID
 import com.oli.projectsai.ui.navigation.ProjectsAINavGraph
 import com.oli.projectsai.ui.navigation.Routes
 import com.oli.projectsai.ui.theme.ProjectsAITheme
 import dagger.hilt.android.AndroidEntryPoint
+import javax.inject.Inject
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.launch
 
 @AndroidEntryPoint
 class MainActivity : ComponentActivity() {
+
+    @Inject lateinit var syncRepository: SyncRepository
 
     private val pendingChatId = MutableStateFlow<Long?>(null)
 
@@ -29,6 +38,17 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         consumeChatIdExtra(intent)
+        // Foreground poll: sync every 60s while the activity is at least STARTED.
+        // repeatOnLifecycle auto-cancels the loop when backgrounded and restarts
+        // on return, so we never burn battery or data when the app isn't visible.
+        lifecycleScope.launch {
+            repeatOnLifecycle(Lifecycle.State.STARTED) {
+                while (true) {
+                    syncRepository.syncNow()
+                    delay(60_000)
+                }
+            }
+        }
         setContent {
             ProjectsAITheme {
                 Surface(modifier = Modifier.fillMaxSize()) {
