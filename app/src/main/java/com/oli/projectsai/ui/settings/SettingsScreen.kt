@@ -41,6 +41,7 @@ fun SettingsScreen(
     val remoteModel by viewModel.remoteModel.collectAsStateWithLifecycle()
     val remoteModels by viewModel.remoteModels.collectAsStateWithLifecycle()
     val remoteError by viewModel.remoteError.collectAsStateWithLifecycle()
+    val pullState by viewModel.pullState.collectAsStateWithLifecycle()
     val syncState by viewModel.syncState.collectAsStateWithLifecycle()
 
     // Auto-launch installer when APK is ready
@@ -142,10 +143,14 @@ fun SettingsScreen(
                 remoteModel = remoteModel,
                 remoteModels = remoteModels,
                 remoteError = remoteError,
+                pullState = pullState,
                 syncState = syncState,
                 onSave = { url, token, model -> viewModel.saveRemoteSettings(url, token, model) },
                 onTest = { url, token, onResult -> viewModel.testConnection(url, token, onResult) },
                 onFetchModels = { url, token -> viewModel.fetchRemoteModels(url, token) },
+                onPullModel = { id -> viewModel.pullModel(id) },
+                onDismissPull = { viewModel.dismissPullState() },
+                onCancelPull = { viewModel.cancelPull() },
                 onSync = { viewModel.syncNow() },
                 onDismissSync = { viewModel.dismissSyncState() }
             )
@@ -427,10 +432,14 @@ private fun RemoteServerSection(
     remoteModel: String,
     remoteModels: List<SettingsViewModel.RemoteModel>,
     remoteError: String?,
+    pullState: PullState?,
     syncState: SyncState,
     onSave: (String, String, String) -> Unit,
     onTest: (String, String, (Boolean, String) -> Unit) -> Unit,
     onFetchModels: (String, String) -> Unit,
+    onPullModel: (String) -> Unit,
+    onDismissPull: () -> Unit,
+    onCancelPull: () -> Unit,
     onSync: () -> Unit,
     onDismissSync: () -> Unit
 ) {
@@ -476,6 +485,53 @@ private fun RemoteServerSection(
             singleLine = true,
             visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation()
         )
+
+        pullState?.let { ps ->
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(
+                    containerColor = if (ps.error != null)
+                        MaterialTheme.colorScheme.errorContainer
+                    else MaterialTheme.colorScheme.surfaceVariant
+                )
+            ) {
+                Column(
+                    modifier = Modifier.padding(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Text(
+                        if (ps.error != null) "Pull failed: ${ps.modelId}"
+                        else if (ps.done) "Pulled ${ps.modelId}"
+                        else "Pulling ${ps.modelId}…",
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                    if (ps.error == null && !ps.done) {
+                        if (ps.progress != null) {
+                            LinearProgressIndicator(
+                                progress = { ps.progress / 100f },
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                            Text("${ps.progress}% · ${ps.status}",
+                                style = MaterialTheme.typography.labelSmall)
+                        } else {
+                            LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                            Text(ps.status, style = MaterialTheme.typography.labelSmall)
+                        }
+                    }
+                    ps.error?.let {
+                        Text(it, style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.error)
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        if (ps.done || ps.error != null) {
+                            TextButton(onClick = onDismissPull) { Text("Dismiss") }
+                        } else {
+                            TextButton(onClick = onCancelPull) { Text("Cancel") }
+                        }
+                    }
+                }
+            }
+        }
 
         when {
             remoteModels.isEmpty() -> {
@@ -527,7 +583,6 @@ private fun RemoteServerSection(
                     ) {
                         remoteModels.forEach { model ->
                             DropdownMenuItem(
-                                enabled = model.installed,
                                 text = {
                                     Column {
                                         Text(model.label, style = MaterialTheme.typography.bodyMedium)
@@ -539,10 +594,28 @@ private fun RemoteServerSection(
                                         )
                                     }
                                 },
+                                trailingIcon = if (!model.installed) {
+                                    {
+                                        IconButton(onClick = {
+                                            modelDropdownExpanded = false
+                                            onPullModel(model.id)
+                                        }) {
+                                            Icon(
+                                                Icons.Default.Download,
+                                                contentDescription = "Pull ${model.label}"
+                                            )
+                                        }
+                                    }
+                                } else null,
                                 onClick = {
-                                    draftModel = model.id
-                                    modelDropdownExpanded = false
-                                    onSave(draftUrl, draftToken, model.id)
+                                    if (model.installed) {
+                                        draftModel = model.id
+                                        modelDropdownExpanded = false
+                                        onSave(draftUrl, draftToken, model.id)
+                                    } else {
+                                        modelDropdownExpanded = false
+                                        onPullModel(model.id)
+                                    }
                                 }
                             )
                         }

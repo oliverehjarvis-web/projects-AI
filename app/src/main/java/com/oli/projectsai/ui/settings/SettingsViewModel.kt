@@ -19,6 +19,8 @@ import com.oli.projectsai.inference.InferenceManager
 import com.oli.projectsai.inference.ModelState
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -27,7 +29,10 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.io.BufferedReader
 import java.io.File
+import java.io.InputStreamReader
 import javax.inject.Inject
 
 sealed class SyncState {
@@ -46,6 +51,14 @@ sealed class UpdateState {
     data class ReadyToInstall(val apkFile: File) : UpdateState()
     data class Error(val message: String) : UpdateState()
 }
+
+data class PullState(
+    val modelId: String,
+    val status: String,
+    val progress: Int?,
+    val done: Boolean = false,
+    val error: String? = null
+)
 
 @HiltViewModel
 class SettingsViewModel @Inject constructor(
@@ -151,6 +164,88 @@ class SettingsViewModel @Inject constructor(
     }
 
     fun dismissRemoteError() { _remoteError.value = null }
+
+    private val _pullState = MutableStateFlow<PullState?>(null)
+    val pullState: StateFlow<PullState?> = _pullState.asStateFlow()
+    private var pullJob: Job? = null
+
+    fun pullModel(modelId: String) {
+        if (pullJob?.isActive == true) return
+        pullJob = viewModelScope.launch {
+            val url = remoteSettings.serverUrl.first().trim().trimEnd('/')
+            val token = remoteSettings.apiToken.first()
+            if (url.isBlank() || token.isBlank()) {
+                _pullState.value = PullState(modelId, "", null, done = true, error = "Configure server URL and token first.")
+                return@launch
+            }
+            _pullState.value = PullState(modelId, "Starting…", null)
+            withContext(Dispatchers.IO) {
+                var conn: java.net.HttpURLConnection? = null
+                try {
+                    val encoded = java.net.URLEncoder.encode(modelId, "UTF-8").replace("+", "%20")
+                    conn = (java.net.URL("$url/v1/models/pull/$encoded").openConnection()
+                            as java.net.HttpURLConnection).apply {
+                        requestMethod = "POST"
+                        connectTimeout = 10_000
+                        readTimeout = 0 // server streams indefinitely until done
+                        setRequestProperty("Authorization", "Bearer $token")
+                        setRequestProperty("Accept", "text/event-stream")
+                        doOutput = false
+                    }
+                    if (conn.responseCode != 200) {
+                        _pullState.value = PullState(modelId, "", null, done = true,
+                            error = "Server returned HTTP ${conn.responseCode}")
+                        return@withContext
+                    }
+                    BufferedReader(InputStreamReader(conn.inputStream)).use { reader ->
+                        while (true) {
+                            val line = reader.readLine() ?: break
+                            if (!line.startsWith("data:")) continue
+                            val payload = line.removePrefix("data:").trim()
+                            if (payload.isEmpty()) continue
+                            val obj = runCatching { org.json.JSONObject(payload) }.getOrNull() ?: continue
+                            val status = obj.optString("status", "")
+                            val progress = if (obj.isNull("progress")) null else obj.optInt("progress")
+                            val error = obj.optString("error", "").ifBlank { null }
+                            if (error != null) {
+                                _pullState.value = PullState(modelId, status, progress, done = true, error = error)
+                                return@withContext
+                            }
+                            if (status == "done") {
+                                _pullState.value = PullState(modelId, "Done", 100, done = true)
+                                return@withContext
+                            }
+                            _pullState.value = PullState(modelId, status, progress)
+                        }
+                        // Stream ended without explicit done.
+                        _pullState.value = PullState(modelId, "Done", 100, done = true)
+                    }
+                } catch (t: Throwable) {
+                    _pullState.value = PullState(modelId, "", null, done = true,
+                        error = t.message ?: "Pull failed")
+                } finally {
+                    conn?.disconnect()
+                }
+            }
+            // On success, refresh catalogue and auto-select if nothing chosen yet.
+            if (_pullState.value?.error == null) {
+                fetchRemoteModels(url, token)
+                if (remoteSettings.defaultModel.first().isBlank()) {
+                    remoteSettings.setDefaultModel(modelId)
+                }
+            }
+        }
+    }
+
+    fun dismissPullState() {
+        if (pullJob?.isActive != true) _pullState.value = null
+    }
+
+    fun cancelPull() {
+        pullJob?.cancel()
+        pullJob = null
+        _pullState.value = null
+    }
 
     fun saveRemoteSettings(url: String, token: String, model: String) {
         viewModelScope.launch {
