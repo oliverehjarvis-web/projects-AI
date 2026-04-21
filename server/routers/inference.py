@@ -13,7 +13,7 @@ router = APIRouter()
 # Seconds between SSE heartbeats while Ollama is silent (e.g. prompt processing
 # on CPU). Heartbeats are SSE comment lines (": hb\n\n"); clients discard them.
 # Keeps the socket alive across the app-side readTimeout.
-_HEARTBEAT_INTERVAL_S = 15.0
+_HEARTBEAT_INTERVAL_S = 10.0
 
 
 class InferenceMessage(BaseModel):
@@ -52,6 +52,10 @@ async def _stream_ollama(req: InferenceRequest) -> AsyncIterator[str]:
             "top_p": req.config.top_p,
         },
     }
+
+    # Flush a heartbeat before we even contact Ollama so any intermediate proxy
+    # commits response headers immediately and the client knows we're alive.
+    yield ": hb\n\n"
 
     async with httpx.AsyncClient(timeout=None) as client:
         async with client.stream(
