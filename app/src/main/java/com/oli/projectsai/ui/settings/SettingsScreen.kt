@@ -39,6 +39,7 @@ fun SettingsScreen(
     val serverUrl by viewModel.serverUrl.collectAsStateWithLifecycle()
     val apiToken by viewModel.apiToken.collectAsStateWithLifecycle()
     val remoteModel by viewModel.remoteModel.collectAsStateWithLifecycle()
+    val remoteModels by viewModel.remoteModels.collectAsStateWithLifecycle()
     val syncState by viewModel.syncState.collectAsStateWithLifecycle()
 
     // Auto-launch installer when APK is ready
@@ -138,9 +139,11 @@ fun SettingsScreen(
                 serverUrl = serverUrl,
                 apiToken = apiToken,
                 remoteModel = remoteModel,
+                remoteModels = remoteModels,
                 syncState = syncState,
                 onSave = { url, token, model -> viewModel.saveRemoteSettings(url, token, model) },
                 onTest = { url, token, onResult -> viewModel.testConnection(url, token, onResult) },
+                onFetchModels = { url, token -> viewModel.fetchRemoteModels(url, token) },
                 onSync = { viewModel.syncNow() },
                 onDismissSync = { viewModel.dismissSyncState() }
             )
@@ -414,14 +417,17 @@ private fun SearchDepthSelector(
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun RemoteServerSection(
     serverUrl: String,
     apiToken: String,
     remoteModel: String,
+    remoteModels: List<SettingsViewModel.RemoteModel>,
     syncState: SyncState,
     onSave: (String, String, String) -> Unit,
     onTest: (String, String, (Boolean, String) -> Unit) -> Unit,
+    onFetchModels: (String, String) -> Unit,
     onSync: () -> Unit,
     onDismissSync: () -> Unit
 ) {
@@ -429,6 +435,14 @@ private fun RemoteServerSection(
     var draftToken by remember(apiToken) { mutableStateOf(apiToken) }
     var draftModel by remember(remoteModel) { mutableStateOf(remoteModel) }
     var testResult by remember { mutableStateOf<Pair<Boolean, String>?>(null) }
+    var modelDropdownExpanded by remember { mutableStateOf(false) }
+
+    LaunchedEffect(remoteModels) {
+        if (draftModel.isBlank() && remoteModels.isNotEmpty()) {
+            draftModel = remoteModels.first().id
+            onSave(draftUrl, draftToken, remoteModels.first().id)
+        }
+    }
 
     Column(
         modifier = Modifier
@@ -457,19 +471,69 @@ private fun RemoteServerSection(
             singleLine = true,
             visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation()
         )
-        OutlinedTextField(
-            value = draftModel,
-            onValueChange = { draftModel = it },
-            modifier = Modifier.fillMaxWidth(),
-            label = { Text("Model name") },
-            placeholder = { Text("gemma3:4b-it-q4_K_M") },
-            singleLine = true
-        )
+
+        if (remoteModels.isEmpty()) {
+            Text(
+                if (testResult?.first == true)
+                    "No models installed on the server. Use the web UI to download one."
+                else
+                    "Save & Test your connection to pick a model.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        } else {
+            ExposedDropdownMenuBox(
+                expanded = modelDropdownExpanded,
+                onExpandedChange = { modelDropdownExpanded = it }
+            ) {
+                val selectedLabel = remoteModels.find { it.id == draftModel }?.let {
+                    "${it.label} (${it.sizeGb} GB)"
+                } ?: draftModel.ifBlank { "Select a model" }
+                OutlinedTextField(
+                    value = selectedLabel,
+                    onValueChange = {},
+                    readOnly = true,
+                    label = { Text("Model") },
+                    trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(modelDropdownExpanded) },
+                    modifier = Modifier
+                        .menuAnchor()
+                        .fillMaxWidth()
+                )
+                ExposedDropdownMenu(
+                    expanded = modelDropdownExpanded,
+                    onDismissRequest = { modelDropdownExpanded = false }
+                ) {
+                    remoteModels.forEach { model ->
+                        DropdownMenuItem(
+                            text = {
+                                Column {
+                                    Text(model.label, style = MaterialTheme.typography.bodyMedium)
+                                    Text(
+                                        "${model.sizeGb} GB",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            },
+                            onClick = {
+                                draftModel = model.id
+                                modelDropdownExpanded = false
+                                onSave(draftUrl, draftToken, model.id)
+                            }
+                        )
+                    }
+                }
+            }
+        }
+
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Button(onClick = {
                 onSave(draftUrl, draftToken, draftModel)
                 testResult = null
-                onTest(draftUrl, draftToken) { ok, msg -> testResult = ok to msg }
+                onTest(draftUrl, draftToken) { ok, msg ->
+                    testResult = ok to msg
+                    if (ok) onFetchModels(draftUrl, draftToken)
+                }
             }) { Text("Save & Test") }
             OutlinedButton(
                 onClick = onSync,

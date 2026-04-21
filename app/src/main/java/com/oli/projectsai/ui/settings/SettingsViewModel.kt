@@ -95,6 +95,38 @@ class SettingsViewModel @Inject constructor(
     private val _syncState = MutableStateFlow<SyncState>(SyncState.Idle)
     val syncState: StateFlow<SyncState> = _syncState.asStateFlow()
 
+    data class RemoteModel(val id: String, val label: String, val sizeGb: Double, val installed: Boolean)
+
+    private val _remoteModels = MutableStateFlow<List<RemoteModel>>(emptyList())
+    val remoteModels: StateFlow<List<RemoteModel>> = _remoteModels.asStateFlow()
+
+    fun fetchRemoteModels(url: String, token: String) {
+        viewModelScope.launch {
+            try {
+                val conn = (java.net.URL("${url.trimEnd('/')}/v1/models").openConnection()
+                        as java.net.HttpURLConnection).apply {
+                    requestMethod = "GET"
+                    connectTimeout = 10_000
+                    readTimeout = 10_000
+                    setRequestProperty("Authorization", "Bearer $token")
+                }
+                val body = conn.inputStream.bufferedReader().readText()
+                conn.disconnect()
+                val catalogue = org.json.JSONObject(body).getJSONArray("catalogue")
+                val models = (0 until catalogue.length()).map { i ->
+                    val m = catalogue.getJSONObject(i)
+                    RemoteModel(
+                        id = m.getString("id"),
+                        label = m.getString("label"),
+                        sizeGb = m.getDouble("size_gb"),
+                        installed = m.getBoolean("installed")
+                    )
+                }.filter { it.installed }
+                _remoteModels.value = models
+            } catch (_: Exception) { }
+        }
+    }
+
     fun saveRemoteSettings(url: String, token: String, model: String) {
         viewModelScope.launch {
             remoteSettings.setServerUrl(url)

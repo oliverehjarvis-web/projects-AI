@@ -5,7 +5,7 @@ from fastapi.responses import FileResponse
 import os
 
 from db import init_db
-from routers import health, inference, sync
+from routers import health, inference, sync, models
 
 
 @asynccontextmanager
@@ -19,6 +19,7 @@ app = FastAPI(title="Projects AI Server", lifespan=lifespan)
 app.include_router(health.router)
 app.include_router(inference.router)
 app.include_router(sync.router)
+app.include_router(models.router)
 
 _WEB_DIST = os.path.join(os.path.dirname(__file__), "web", "dist")
 if os.path.isdir(_WEB_DIST):
