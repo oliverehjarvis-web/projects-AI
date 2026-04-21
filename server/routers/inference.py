@@ -57,48 +57,77 @@ async def _stream_ollama(req: InferenceRequest) -> AsyncIterator[str]:
     # commits response headers immediately and the client knows we're alive.
     yield ": hb\n\n"
 
-    async with httpx.AsyncClient(timeout=None) as client:
-        async with client.stream(
-            "POST", f"{OLLAMA_URL}/api/chat", json=body
-        ) as response:
-            if response.status_code != 200:
-                # Ollama returns errors as JSON like {"error": "model ... not found"}.
-                # Surface the body through the SSE stream so the client can show it
-                # instead of failing silently when e.g. a model is missing or OOMs.
-                detail = ""
-                try:
-                    raw = await response.aread()
-                    detail = raw.decode("utf-8", errors="replace")[:500]
-                    try:
-                        detail = json.loads(detail).get("error", detail)
-                    except Exception:
-                        pass
-                except Exception:
-                    pass
-                msg = f"Ollama HTTP {response.status_code}: {detail}" if detail else f"Ollama HTTP {response.status_code}"
-                yield f"data: {json.dumps({'error': msg})}\n\n"
+    # Big models (e.g. 26B) can take many minutes to load into RAM before Ollama
+    # sends its response headers — i.e. `async with client.stream(...)` blocks
+    # inside aenter. We need heartbeats to flow during that window, so the Ollama
+    # side runs in a background task and the generator pulls events from a queue
+    # with a timeout. The timeout branch is what lets us keep the socket alive.
+    _SENTINEL = object()
+    queue: asyncio.Queue = asyncio.Queue()
+
+    async def pump() -> None:
+        try:
+            async with httpx.AsyncClient(timeout=None) as client:
+                async with client.stream(
+                    "POST", f"{OLLAMA_URL}/api/chat", json=body
+                ) as response:
+                    if response.status_code != 200:
+                        detail = ""
+                        try:
+                            raw = await response.aread()
+                            detail = raw.decode("utf-8", errors="replace")[:500]
+                            try:
+                                detail = json.loads(detail).get("error", detail)
+                            except Exception:
+                                pass
+                        except Exception:
+                            pass
+                        msg = (
+                            f"Ollama HTTP {response.status_code}: {detail}"
+                            if detail else f"Ollama HTTP {response.status_code}"
+                        )
+                        await queue.put(("error", msg))
+                        return
+                    async for line in response.aiter_lines():
+                        if line:
+                            await queue.put(("line", line))
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            await queue.put(("error", f"Upstream error: {e}"))
+        finally:
+            await queue.put((_SENTINEL, None))
+
+    task = asyncio.create_task(pump())
+    try:
+        while True:
+            try:
+                kind, payload = await asyncio.wait_for(queue.get(), _HEARTBEAT_INTERVAL_S)
+            except asyncio.TimeoutError:
+                yield ": hb\n\n"
+                continue
+            if kind is _SENTINEL:
                 return
-            it = response.aiter_lines()
-            while True:
-                try:
-                    line = await asyncio.wait_for(it.__anext__(), _HEARTBEAT_INTERVAL_S)
-                except asyncio.TimeoutError:
-                    yield ": hb\n\n"
-                    continue
-                except StopAsyncIteration:
-                    break
-                if not line:
-                    continue
-                try:
-                    chunk = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                token = chunk.get("message", {}).get("content", "")
-                if token:
-                    yield f"data: {json.dumps({'token': token})}\n\n"
-                if chunk.get("done"):
-                    yield "data: [DONE]\n\n"
-                    return
+            if kind == "error":
+                yield f"data: {json.dumps({'error': payload})}\n\n"
+                return
+            # kind == "line"
+            try:
+                chunk = json.loads(payload)
+            except json.JSONDecodeError:
+                continue
+            token = chunk.get("message", {}).get("content", "")
+            if token:
+                yield f"data: {json.dumps({'token': token})}\n\n"
+            if chunk.get("done"):
+                yield "data: [DONE]\n\n"
+                return
+    finally:
+        task.cancel()
+        try:
+            await task
+        except BaseException:
+            pass
 
 
 @router.post("/v1/generate")
