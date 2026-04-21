@@ -119,7 +119,9 @@ async def _stream_ollama(req: InferenceRequest) -> AsyncIterator[str]:
 
     task = asyncio.create_task(pump())
     tokens_sent = 0
+    thinking_tokens_sent = 0
     first_line_logged = False
+    in_thinking_block = False  # whether we've opened a <think> wrapper the client hasn't seen close yet
     try:
         while True:
             try:
@@ -128,9 +130,12 @@ async def _stream_ollama(req: InferenceRequest) -> AsyncIterator[str]:
                 yield ": hb\n\n"
                 continue
             if kind is _SENTINEL:
+                if in_thinking_block:
+                    # Close the wrapper so the app doesn't render a dangling tag.
+                    yield f"data: {json.dumps({'token': '</think>\n\n'})}\n\n"
                 _log(
-                    "generate end tokens=%d elapsed=%.1fs",
-                    tokens_sent, time.monotonic() - started,
+                    "generate end content=%d thinking=%d elapsed=%.1fs",
+                    tokens_sent, thinking_tokens_sent, time.monotonic() - started,
                 )
                 return
             if kind == "error":
@@ -152,11 +157,29 @@ async def _stream_ollama(req: InferenceRequest) -> AsyncIterator[str]:
                 _log("ollama in-stream error: %s", msg)
                 yield f"data: {json.dumps({'error': str(msg)})}\n\n"
                 return
-            token = chunk.get("message", {}).get("content", "")
-            if token:
+            message = chunk.get("message", {}) or {}
+            # Thinking models (QwQ, gemma4 thinking variants, DeepSeek-R1) stream
+            # chain-of-thought in message.thinking before any message.content. If
+            # we drop those, the app sees silence for minutes. Wrap them in
+            # <think>…</think> so the current client renders them as visible text.
+            thinking = message.get("thinking") or ""
+            content = message.get("content") or ""
+            if thinking:
+                if not in_thinking_block:
+                    yield f"data: {json.dumps({'token': '<think>'})}\n\n"
+                    in_thinking_block = True
+                thinking_tokens_sent += 1
+                yield f"data: {json.dumps({'token': thinking})}\n\n"
+            if content:
+                if in_thinking_block:
+                    yield f"data: {json.dumps({'token': '</think>\n\n'})}\n\n"
+                    in_thinking_block = False
                 tokens_sent += 1
-                yield f"data: {json.dumps({'token': token})}\n\n"
+                yield f"data: {json.dumps({'token': content})}\n\n"
             if chunk.get("done"):
+                if in_thinking_block:
+                    yield f"data: {json.dumps({'token': '</think>\n\n'})}\n\n"
+                    in_thinking_block = False
                 yield "data: [DONE]\n\n"
                 return
     finally:
