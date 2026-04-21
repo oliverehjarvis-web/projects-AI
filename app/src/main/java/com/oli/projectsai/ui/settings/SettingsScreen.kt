@@ -40,6 +40,7 @@ fun SettingsScreen(
     val apiToken by viewModel.apiToken.collectAsStateWithLifecycle()
     val remoteModel by viewModel.remoteModel.collectAsStateWithLifecycle()
     val remoteModels by viewModel.remoteModels.collectAsStateWithLifecycle()
+    val remoteError by viewModel.remoteError.collectAsStateWithLifecycle()
     val syncState by viewModel.syncState.collectAsStateWithLifecycle()
 
     // Auto-launch installer when APK is ready
@@ -140,6 +141,7 @@ fun SettingsScreen(
                 apiToken = apiToken,
                 remoteModel = remoteModel,
                 remoteModels = remoteModels,
+                remoteError = remoteError,
                 syncState = syncState,
                 onSave = { url, token, model -> viewModel.saveRemoteSettings(url, token, model) },
                 onTest = { url, token, onResult -> viewModel.testConnection(url, token, onResult) },
@@ -424,6 +426,7 @@ private fun RemoteServerSection(
     apiToken: String,
     remoteModel: String,
     remoteModels: List<SettingsViewModel.RemoteModel>,
+    remoteError: String?,
     syncState: SyncState,
     onSave: (String, String, String) -> Unit,
     onTest: (String, String, (Boolean, String) -> Unit) -> Unit,
@@ -437,10 +440,12 @@ private fun RemoteServerSection(
     var testResult by remember { mutableStateOf<Pair<Boolean, String>?>(null) }
     var modelDropdownExpanded by remember { mutableStateOf(false) }
 
-    LaunchedEffect(remoteModels) {
-        if (draftModel.isBlank() && remoteModels.isNotEmpty()) {
-            draftModel = remoteModels.first().id
-            onSave(draftUrl, draftToken, remoteModels.first().id)
+    val installedModels = remoteModels.filter { it.installed }
+
+    LaunchedEffect(installedModels) {
+        if (draftModel.isBlank() && installedModels.isNotEmpty()) {
+            draftModel = installedModels.first().id
+            onSave(draftUrl, draftToken, installedModels.first().id)
         }
     }
 
@@ -472,56 +477,84 @@ private fun RemoteServerSection(
             visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation()
         )
 
-        if (remoteModels.isEmpty()) {
-            Text(
-                if (testResult?.first == true)
-                    "No models installed on the server. Use the web UI to download one."
-                else
-                    "Save & Test your connection to pick a model.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-        } else {
-            ExposedDropdownMenuBox(
-                expanded = modelDropdownExpanded,
-                onExpandedChange = { modelDropdownExpanded = it }
-            ) {
-                val selectedLabel = remoteModels.find { it.id == draftModel }?.let {
-                    "${it.label} (${it.sizeGb} GB)"
-                } ?: draftModel.ifBlank { "Select a model" }
-                OutlinedTextField(
-                    value = selectedLabel,
-                    onValueChange = {},
-                    readOnly = true,
-                    label = { Text("Model") },
-                    trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(modelDropdownExpanded) },
-                    modifier = Modifier
-                        .menuAnchor()
-                        .fillMaxWidth()
+        when {
+            remoteModels.isEmpty() -> {
+                val hint = when {
+                    remoteError != null -> "Couldn't fetch models: $remoteError"
+                    draftUrl.isBlank() || draftToken.isBlank() ->
+                        "Enter your server URL and token, then Save & Test to pick a model."
+                    else -> "Save & Test your connection to pick a model."
+                }
+                Text(
+                    hint,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (remoteError != null) MaterialTheme.colorScheme.error
+                            else MaterialTheme.colorScheme.onSurfaceVariant
                 )
-                ExposedDropdownMenu(
+            }
+            installedModels.isEmpty() -> {
+                Text(
+                    "No models installed on the server yet. Use the web UI to pull one — " +
+                        "${remoteModels.size} are available in the catalogue.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            else -> {
+                ExposedDropdownMenuBox(
                     expanded = modelDropdownExpanded,
-                    onDismissRequest = { modelDropdownExpanded = false }
+                    onExpandedChange = { modelDropdownExpanded = it }
                 ) {
-                    remoteModels.forEach { model ->
-                        DropdownMenuItem(
-                            text = {
-                                Column {
-                                    Text(model.label, style = MaterialTheme.typography.bodyMedium)
-                                    Text(
-                                        "${model.sizeGb} GB",
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
+                    val selectedLabel = remoteModels.find { it.id == draftModel }?.let {
+                        val suffix = if (!it.installed) " (not installed)" else ""
+                        "${it.label} (${it.sizeGb} GB)$suffix"
+                    } ?: draftModel.ifBlank { "Select a model" }
+                    OutlinedTextField(
+                        value = selectedLabel,
+                        onValueChange = {},
+                        readOnly = true,
+                        isError = draftModel.isNotBlank() &&
+                            remoteModels.none { it.id == draftModel && it.installed },
+                        label = { Text("Model") },
+                        trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(modelDropdownExpanded) },
+                        modifier = Modifier
+                            .menuAnchor()
+                            .fillMaxWidth()
+                    )
+                    ExposedDropdownMenu(
+                        expanded = modelDropdownExpanded,
+                        onDismissRequest = { modelDropdownExpanded = false }
+                    ) {
+                        remoteModels.forEach { model ->
+                            DropdownMenuItem(
+                                enabled = model.installed,
+                                text = {
+                                    Column {
+                                        Text(model.label, style = MaterialTheme.typography.bodyMedium)
+                                        Text(
+                                            "${model.sizeGb} GB" +
+                                                if (!model.installed) " · not installed" else "",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                },
+                                onClick = {
+                                    draftModel = model.id
+                                    modelDropdownExpanded = false
+                                    onSave(draftUrl, draftToken, model.id)
                                 }
-                            },
-                            onClick = {
-                                draftModel = model.id
-                                modelDropdownExpanded = false
-                                onSave(draftUrl, draftToken, model.id)
-                            }
-                        )
+                            )
+                        }
                     }
+                }
+                if (draftModel.isNotBlank() &&
+                    remoteModels.none { it.id == draftModel && it.installed }) {
+                    Text(
+                        "The saved model isn't installed on the server anymore — pick another.",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.error
+                    )
                 }
             }
         }

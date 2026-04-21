@@ -24,6 +24,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import java.io.File
@@ -100,20 +101,38 @@ class SettingsViewModel @Inject constructor(
     private val _remoteModels = MutableStateFlow<List<RemoteModel>>(emptyList())
     val remoteModels: StateFlow<List<RemoteModel>> = _remoteModels.asStateFlow()
 
-    fun fetchRemoteModels(url: String, token: String) {
+    private val _remoteError = MutableStateFlow<String?>(null)
+    val remoteError: StateFlow<String?> = _remoteError.asStateFlow()
+
+    init {
+        // Auto-populate the model list when the screen opens with an already-configured server.
         viewModelScope.launch {
+            val url = remoteSettings.serverUrl.first()
+            val token = remoteSettings.apiToken.first()
+            if (url.isNotBlank() && token.isNotBlank()) fetchRemoteModels(url, token)
+        }
+    }
+
+    fun fetchRemoteModels(url: String, token: String) {
+        if (url.isBlank() || token.isBlank()) return
+        viewModelScope.launch {
+            var conn: java.net.HttpURLConnection? = null
             try {
-                val conn = (java.net.URL("${url.trimEnd('/')}/v1/models").openConnection()
+                conn = (java.net.URL("${url.trimEnd('/')}/v1/models").openConnection()
                         as java.net.HttpURLConnection).apply {
                     requestMethod = "GET"
                     connectTimeout = 10_000
                     readTimeout = 10_000
                     setRequestProperty("Authorization", "Bearer $token")
                 }
+                val code = conn.responseCode
+                if (code != 200) {
+                    _remoteError.value = "Server returned HTTP $code when listing models."
+                    return@launch
+                }
                 val body = conn.inputStream.bufferedReader().readText()
-                conn.disconnect()
                 val catalogue = org.json.JSONObject(body).getJSONArray("catalogue")
-                val models = (0 until catalogue.length()).map { i ->
+                _remoteModels.value = (0 until catalogue.length()).map { i ->
                     val m = catalogue.getJSONObject(i)
                     RemoteModel(
                         id = m.getString("id"),
@@ -121,11 +140,17 @@ class SettingsViewModel @Inject constructor(
                         sizeGb = m.getDouble("size_gb"),
                         installed = m.getBoolean("installed")
                     )
-                }.filter { it.installed }
-                _remoteModels.value = models
-            } catch (_: Exception) { }
+                }.sortedWith(compareByDescending<RemoteModel> { it.installed }.thenBy { it.label })
+                _remoteError.value = null
+            } catch (t: Throwable) {
+                _remoteError.value = t.message ?: "Failed to fetch models"
+            } finally {
+                conn?.disconnect()
+            }
         }
     }
+
+    fun dismissRemoteError() { _remoteError.value = null }
 
     fun saveRemoteSettings(url: String, token: String, model: String) {
         viewModelScope.launch {
@@ -140,17 +165,15 @@ class SettingsViewModel @Inject constructor(
             try {
                 remoteSettings.setServerUrl(url)
                 remoteSettings.setApiToken(token)
-                val remoteBackend = inferenceManager.getBackend("remote_http")
-                if (remoteBackend == null) {
-                    onResult(false, "Remote backend unavailable")
-                    return@launch
-                }
-                remoteBackend.loadModel(
+                // Wait for the write to propagate before the backend reads from RemoteSettings.
+                remoteSettings.serverUrl.first { it == url.trim().trimEnd('/') }
+                inferenceManager.loadModel(
                     com.oli.projectsai.inference.ModelInfo(
-                        name = "remote",
+                        name = remoteSettings.defaultModel.first().ifBlank { "Remote server" },
                         precision = com.oli.projectsai.inference.ModelPrecision.Q4,
                         filePath = ""
-                    )
+                    ),
+                    backendId = "remote_http"
                 )
                 onResult(true, "Connected")
             } catch (t: Throwable) {

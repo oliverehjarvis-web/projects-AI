@@ -5,6 +5,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.launchIn
@@ -28,37 +29,42 @@ class RemoteHttpBackend @Inject constructor(
         private const val CHARS_PER_TOKEN = 4.0f
     }
 
+    // Singleton — scope lives for the process lifetime.
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
-    @Volatile private var _serverUrl: String = ""
-    @Volatile private var _apiToken: String = ""
-    @Volatile private var _model: String = "gemma3:4b-it-q4_K_M"
+    // Cached for the synchronous `isAvailable` property; the suspend paths read freshly.
+    @Volatile private var serverUrlSnapshot: String = ""
     @Volatile private var _isLoaded: Boolean = false
 
     init {
-        remoteSettings.serverUrl.onEach { _serverUrl = it }.launchIn(scope)
-        remoteSettings.apiToken.onEach { _apiToken = it }.launchIn(scope)
-        remoteSettings.defaultModel.onEach { _model = it }.launchIn(scope)
+        remoteSettings.serverUrl.onEach { serverUrlSnapshot = it }.launchIn(scope)
     }
 
     override val id: String = "remote_http"
     override val displayName: String = "Remote Server"
-    override val isAvailable: Boolean get() = _serverUrl.isNotBlank()
+    override val isAvailable: Boolean get() = serverUrlSnapshot.isNotBlank()
     override val isLoaded: Boolean get() = _isLoaded
     override val loadedModel: ModelInfo? = null
 
     override suspend fun loadModel(modelInfo: ModelInfo) {
-        val url = _serverUrl.ifBlank { throw InferenceError.LoadFailed(IllegalStateException("Server URL not configured")) }
+        val url = remoteSettings.serverUrl.first().ifBlank {
+            throw InferenceError.LoadFailed(IllegalStateException("Server URL not configured"))
+        }
+        val token = remoteSettings.apiToken.first()
         withContext(Dispatchers.IO) {
             val conn = (URL("$url/v1/health").openConnection() as HttpURLConnection).apply {
                 requestMethod = "GET"
                 connectTimeout = 10_000
                 readTimeout = 10_000
-                setRequestProperty("Authorization", "Bearer $_apiToken")
+                setRequestProperty("Authorization", "Bearer $token")
             }
             try {
                 val code = conn.responseCode
-                if (code != 200) throw InferenceError.LoadFailed(IllegalStateException("Health check failed: HTTP $code"))
+                if (code != 200) {
+                    throw InferenceError.LoadFailed(
+                        IllegalStateException("Health check failed: HTTP $code${readErrorDetail(conn)}")
+                    )
+                }
             } catch (ie: InferenceError) {
                 throw ie
             } catch (t: Throwable) {
@@ -79,9 +85,18 @@ class RemoteHttpBackend @Inject constructor(
         messages: List<ChatMessage>,
         config: GenerationConfig
     ): Flow<String> {
-        val url = _serverUrl.ifBlank { throw InferenceError.ModelNotLoaded }
-        val token = _apiToken
-        val model = _model
+        val url = remoteSettings.serverUrl.first().ifBlank {
+            throw InferenceError.GenerationFailed(
+                IllegalStateException("Remote server URL not configured.")
+            )
+        }
+        val token = remoteSettings.apiToken.first()
+        val model = remoteSettings.defaultModel.first()
+        if (model.isBlank()) {
+            throw InferenceError.GenerationFailed(
+                IllegalStateException("No remote model selected. Pick one in Settings → Remote server.")
+            )
+        }
 
         val body = JSONObject().apply {
             put("system_prompt", systemPrompt)
@@ -114,9 +129,11 @@ class RemoteHttpBackend @Inject constructor(
             }
             try {
                 val code = conn.responseCode
-                if (code != 200) throw InferenceError.GenerationFailed(
-                    IllegalStateException("Server returned HTTP $code")
-                )
+                if (code != 200) {
+                    throw InferenceError.GenerationFailed(
+                        IllegalStateException("Server returned HTTP $code${readErrorDetail(conn)}")
+                    )
+                }
                 BufferedReader(InputStreamReader(conn.inputStream, Charsets.UTF_8)).use { reader ->
                     var line: String?
                     while (reader.readLine().also { line = it } != null) {
@@ -125,8 +142,8 @@ class RemoteHttpBackend @Inject constructor(
                         val payload = l.removePrefix("data: ")
                         if (payload == "[DONE]") return@flow
                         try {
-                            val token = JSONObject(payload).getString("token")
-                            if (token.isNotEmpty()) emit(token)
+                            val chunk = JSONObject(payload).getString("token")
+                            if (chunk.isNotEmpty()) emit(chunk)
                         } catch (_: Exception) { /* skip malformed line */ }
                     }
                 }
@@ -147,4 +164,11 @@ class RemoteHttpBackend @Inject constructor(
     override suspend fun countTokens(text: String): Int =
         if (text.isEmpty()) 0
         else (text.length / CHARS_PER_TOKEN).toInt().coerceAtLeast(1)
+
+    private fun readErrorDetail(conn: HttpURLConnection): String =
+        runCatching { conn.errorStream?.bufferedReader()?.use { it.readText() } }
+            .getOrNull()
+            ?.takeIf { it.isNotBlank() }
+            ?.let { " — ${it.take(200)}" }
+            .orEmpty()
 }

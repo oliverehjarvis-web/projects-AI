@@ -25,9 +25,7 @@ class RemoteSettings @Inject constructor(
 
     val serverUrl: Flow<String> = store.data.map { it[KEY_SERVER_URL].orEmpty() }
     val apiToken: Flow<String> = store.data.map { it[KEY_API_TOKEN].orEmpty() }
-    val defaultModel: Flow<String> = store.data.map {
-        it[KEY_DEFAULT_MODEL].orEmpty().ifBlank { "gemma3:4b-it-q4_K_M" }
-    }
+    val defaultModel: Flow<String> = store.data.map { it[KEY_DEFAULT_MODEL].orEmpty() }
     val lastSyncAt: Flow<Long> = store.data.map { it[KEY_LAST_SYNC_AT] ?: 0L }
 
     suspend fun setServerUrl(value: String) {
