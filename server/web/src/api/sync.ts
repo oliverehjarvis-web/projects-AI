@@ -6,8 +6,12 @@ export interface Project {
   description: string;
   manual_context: string;
   accumulated_memory: string;
+  pinned_memories: string;
   is_secret: boolean;
   preferred_backend: string;
+  memory_token_limit: number;
+  context_length: number;
+  created_at: number;
   updated_at: number;
   deleted_at: number | null;
 }
@@ -17,6 +21,7 @@ export interface Chat {
   project_remote_id: string;
   title: string;
   web_search_enabled: boolean;
+  created_at: number;
   updated_at: number;
   deleted_at: number | null;
 }
@@ -55,6 +60,86 @@ export async function pushMessage(msg: Omit<Message, "remote_id">): Promise<stri
   });
   const data = await r.json();
   return data.remote_ids[0] as string;
+}
+
+export async function createProject(name: string, description: string): Promise<Project> {
+  const now = Date.now();
+  const item = {
+    remote_id: null,
+    name,
+    description,
+    manual_context: "",
+    accumulated_memory: "",
+    pinned_memories: "",
+    preferred_backend: "REMOTE",
+    memory_token_limit: 4000,
+    context_length: 16384,
+    is_secret: false,
+    created_at: now,
+    updated_at: now,
+    deleted_at: null,
+  };
+  const r = await apiFetch("/v1/sync/projects", {
+    method: "PUT",
+    body: JSON.stringify({ items: [item] }),
+  });
+  const data = await r.json();
+  return { ...item, remote_id: data.remote_ids[0] } as Project;
+}
+
+export async function createChat(projectRemoteId: string, title = "New Chat"): Promise<Chat> {
+  const now = Date.now();
+  const item = {
+    remote_id: null,
+    project_remote_id: projectRemoteId,
+    title,
+    web_search_enabled: false,
+    created_at: now,
+    updated_at: now,
+    deleted_at: null,
+  };
+  const r = await apiFetch("/v1/sync/chats", {
+    method: "PUT",
+    body: JSON.stringify({ items: [item] }),
+  });
+  const data = await r.json();
+  return { ...item, remote_id: data.remote_ids[0] } as Chat;
+}
+
+export async function updateChat(chat: Chat): Promise<void> {
+  const now = Date.now();
+  const item = { ...chat, updated_at: now };
+  await apiFetch("/v1/sync/chats", {
+    method: "PUT",
+    body: JSON.stringify({ items: [item] }),
+  });
+}
+
+export async function deleteChat(chat: Chat): Promise<void> {
+  const now = Date.now();
+  const item = { ...chat, updated_at: now, deleted_at: now };
+  await apiFetch("/v1/sync/chats", {
+    method: "PUT",
+    body: JSON.stringify({ items: [item] }),
+  });
+}
+
+export async function updateProject(project: Project): Promise<void> {
+  const now = Date.now();
+  const item = { ...project, updated_at: now };
+  await apiFetch("/v1/sync/projects", {
+    method: "PUT",
+    body: JSON.stringify({ items: [item] }),
+  });
+}
+
+export async function deleteProject(project: Project): Promise<void> {
+  const now = Date.now();
+  const item = { ...project, updated_at: now, deleted_at: now };
+  await apiFetch("/v1/sync/projects", {
+    method: "PUT",
+    body: JSON.stringify({ items: [item] }),
+  });
 }
 
 export async function checkHealth(): Promise<{ status: string; ollama: string }> {

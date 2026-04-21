@@ -129,36 +129,38 @@ class SettingsViewModel @Inject constructor(
     fun fetchRemoteModels(url: String, token: String) {
         if (url.isBlank() || token.isBlank()) return
         viewModelScope.launch {
-            var conn: java.net.HttpURLConnection? = null
-            try {
-                conn = (java.net.URL("${url.trimEnd('/')}/v1/models").openConnection()
-                        as java.net.HttpURLConnection).apply {
-                    requestMethod = "GET"
-                    connectTimeout = 10_000
-                    readTimeout = 10_000
-                    setRequestProperty("Authorization", "Bearer $token")
+            withContext(Dispatchers.IO) {
+                var conn: java.net.HttpURLConnection? = null
+                try {
+                    conn = (java.net.URL("${url.trimEnd('/')}/v1/models").openConnection()
+                            as java.net.HttpURLConnection).apply {
+                        requestMethod = "GET"
+                        connectTimeout = 10_000
+                        readTimeout = 10_000
+                        setRequestProperty("Authorization", "Bearer $token")
+                    }
+                    val code = conn.responseCode
+                    if (code != 200) {
+                        _remoteError.value = "Server returned HTTP $code when listing models."
+                        return@withContext
+                    }
+                    val body = conn.inputStream.bufferedReader().readText()
+                    val catalogue = org.json.JSONObject(body).getJSONArray("catalogue")
+                    _remoteModels.value = (0 until catalogue.length()).map { i ->
+                        val m = catalogue.getJSONObject(i)
+                        RemoteModel(
+                            id = m.getString("id"),
+                            label = m.getString("label"),
+                            sizeGb = m.getDouble("size_gb"),
+                            installed = m.getBoolean("installed")
+                        )
+                    }.sortedWith(compareByDescending<RemoteModel> { it.installed }.thenBy { it.label })
+                    _remoteError.value = null
+                } catch (t: Throwable) {
+                    _remoteError.value = t.message ?: "Failed to fetch models"
+                } finally {
+                    conn?.disconnect()
                 }
-                val code = conn.responseCode
-                if (code != 200) {
-                    _remoteError.value = "Server returned HTTP $code when listing models."
-                    return@launch
-                }
-                val body = conn.inputStream.bufferedReader().readText()
-                val catalogue = org.json.JSONObject(body).getJSONArray("catalogue")
-                _remoteModels.value = (0 until catalogue.length()).map { i ->
-                    val m = catalogue.getJSONObject(i)
-                    RemoteModel(
-                        id = m.getString("id"),
-                        label = m.getString("label"),
-                        sizeGb = m.getDouble("size_gb"),
-                        installed = m.getBoolean("installed")
-                    )
-                }.sortedWith(compareByDescending<RemoteModel> { it.installed }.thenBy { it.label })
-                _remoteError.value = null
-            } catch (t: Throwable) {
-                _remoteError.value = t.message ?: "Failed to fetch models"
-            } finally {
-                conn?.disconnect()
             }
         }
     }
