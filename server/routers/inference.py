@@ -1,6 +1,6 @@
 import asyncio
 import json
-import logging
+import sys
 import time
 from typing import AsyncIterator
 from fastapi import APIRouter, Depends
@@ -10,8 +10,12 @@ from pydantic import BaseModel
 from auth import require_auth
 from config import OLLAMA_URL, DEFAULT_MODEL
 
-logger = logging.getLogger("inference")
-logger.setLevel(logging.INFO)
+
+def _log(fmt: str, *args: object) -> None:
+    # Uvicorn doesn't attach a handler to arbitrary loggers, so we write to
+    # stdout directly to guarantee the line shows up in `docker logs`.
+    print(f"[inference] {fmt % args}" if args else f"[inference] {fmt}", file=sys.stdout, flush=True)
+
 
 router = APIRouter()
 
@@ -70,7 +74,7 @@ async def _stream_ollama(req: InferenceRequest) -> AsyncIterator[str]:
     _SENTINEL = object()
     queue: asyncio.Queue = asyncio.Queue()
     started = time.monotonic()
-    logger.info("generate start model=%s msgs=%d", req.config.model, len(ollama_messages))
+    _log("generate start model=%s msgs=%d", req.config.model, len(ollama_messages))
 
     async def pump() -> None:
         try:
@@ -78,7 +82,7 @@ async def _stream_ollama(req: InferenceRequest) -> AsyncIterator[str]:
                 async with client.stream(
                     "POST", f"{OLLAMA_URL}/api/chat", json=body
                 ) as response:
-                    logger.info(
+                    _log(
                         "ollama connected status=%d after %.1fs",
                         response.status_code, time.monotonic() - started,
                     )
@@ -97,17 +101,18 @@ async def _stream_ollama(req: InferenceRequest) -> AsyncIterator[str]:
                             f"Ollama HTTP {response.status_code}: {detail}"
                             if detail else f"Ollama HTTP {response.status_code}"
                         )
-                        logger.warning("ollama non-200: %s", msg)
+                        _log("ollama non-200: %s", msg)
                         await queue.put(("error", msg))
                         return
                     async for line in response.aiter_lines():
                         if line:
                             await queue.put(("line", line))
-                    logger.info("ollama stream closed cleanly after %.1fs", time.monotonic() - started)
+                    _log("ollama stream closed cleanly after %.1fs", time.monotonic() - started)
         except asyncio.CancelledError:
             raise
         except Exception as e:
-            logger.exception("ollama pump exception")
+            import traceback
+            _log("ollama pump exception:\n%s", traceback.format_exc())
             await queue.put(("error", f"Upstream error: {e}"))
         finally:
             await queue.put((_SENTINEL, None))
@@ -123,7 +128,7 @@ async def _stream_ollama(req: InferenceRequest) -> AsyncIterator[str]:
                 yield ": hb\n\n"
                 continue
             if kind is _SENTINEL:
-                logger.info(
+                _log(
                     "generate end tokens=%d elapsed=%.1fs",
                     tokens_sent, time.monotonic() - started,
                 )
@@ -135,7 +140,7 @@ async def _stream_ollama(req: InferenceRequest) -> AsyncIterator[str]:
             if not first_line_logged:
                 # First line from Ollama tells us whether we're streaming tokens
                 # or hitting a response-shaped error we weren't expecting.
-                logger.info("ollama first line (%d bytes): %s", len(payload), payload[:300])
+                _log("ollama first line (%d bytes): %s", len(payload), payload[:300])
                 first_line_logged = True
             try:
                 chunk = json.loads(payload)
@@ -144,7 +149,7 @@ async def _stream_ollama(req: InferenceRequest) -> AsyncIterator[str]:
             # Ollama can return a 200 with a JSON line carrying an error field.
             if "error" in chunk:
                 msg = chunk.get("error") or "Ollama returned an error"
-                logger.warning("ollama in-stream error: %s", msg)
+                _log("ollama in-stream error: %s", msg)
                 yield f"data: {json.dumps({'error': str(msg)})}\n\n"
                 return
             token = chunk.get("message", {}).get("content", "")
