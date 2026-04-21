@@ -1,5 +1,7 @@
 import asyncio
 import json
+import logging
+import time
 from typing import AsyncIterator
 from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
@@ -7,6 +9,9 @@ import httpx
 from pydantic import BaseModel
 from auth import require_auth
 from config import OLLAMA_URL, DEFAULT_MODEL
+
+logger = logging.getLogger("inference")
+logger.setLevel(logging.INFO)
 
 router = APIRouter()
 
@@ -64,6 +69,8 @@ async def _stream_ollama(req: InferenceRequest) -> AsyncIterator[str]:
     # with a timeout. The timeout branch is what lets us keep the socket alive.
     _SENTINEL = object()
     queue: asyncio.Queue = asyncio.Queue()
+    started = time.monotonic()
+    logger.info("generate start model=%s msgs=%d", req.config.model, len(ollama_messages))
 
     async def pump() -> None:
         try:
@@ -71,6 +78,10 @@ async def _stream_ollama(req: InferenceRequest) -> AsyncIterator[str]:
                 async with client.stream(
                     "POST", f"{OLLAMA_URL}/api/chat", json=body
                 ) as response:
+                    logger.info(
+                        "ollama connected status=%d after %.1fs",
+                        response.status_code, time.monotonic() - started,
+                    )
                     if response.status_code != 200:
                         detail = ""
                         try:
@@ -86,19 +97,24 @@ async def _stream_ollama(req: InferenceRequest) -> AsyncIterator[str]:
                             f"Ollama HTTP {response.status_code}: {detail}"
                             if detail else f"Ollama HTTP {response.status_code}"
                         )
+                        logger.warning("ollama non-200: %s", msg)
                         await queue.put(("error", msg))
                         return
                     async for line in response.aiter_lines():
                         if line:
                             await queue.put(("line", line))
+                    logger.info("ollama stream closed cleanly after %.1fs", time.monotonic() - started)
         except asyncio.CancelledError:
             raise
         except Exception as e:
+            logger.exception("ollama pump exception")
             await queue.put(("error", f"Upstream error: {e}"))
         finally:
             await queue.put((_SENTINEL, None))
 
     task = asyncio.create_task(pump())
+    tokens_sent = 0
+    first_line_logged = False
     try:
         while True:
             try:
@@ -107,17 +123,33 @@ async def _stream_ollama(req: InferenceRequest) -> AsyncIterator[str]:
                 yield ": hb\n\n"
                 continue
             if kind is _SENTINEL:
+                logger.info(
+                    "generate end tokens=%d elapsed=%.1fs",
+                    tokens_sent, time.monotonic() - started,
+                )
                 return
             if kind == "error":
                 yield f"data: {json.dumps({'error': payload})}\n\n"
                 return
             # kind == "line"
+            if not first_line_logged:
+                # First line from Ollama tells us whether we're streaming tokens
+                # or hitting a response-shaped error we weren't expecting.
+                logger.info("ollama first line (%d bytes): %s", len(payload), payload[:300])
+                first_line_logged = True
             try:
                 chunk = json.loads(payload)
             except json.JSONDecodeError:
                 continue
+            # Ollama can return a 200 with a JSON line carrying an error field.
+            if "error" in chunk:
+                msg = chunk.get("error") or "Ollama returned an error"
+                logger.warning("ollama in-stream error: %s", msg)
+                yield f"data: {json.dumps({'error': str(msg)})}\n\n"
+                return
             token = chunk.get("message", {}).get("content", "")
             if token:
+                tokens_sent += 1
                 yield f"data: {json.dumps({'token': token})}\n\n"
             if chunk.get("done"):
                 yield "data: [DONE]\n\n"
