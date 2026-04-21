@@ -3,6 +3,7 @@ package com.oli.projectsai.inference
 import com.oli.projectsai.data.preferences.RemoteSettings
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.InternalCoroutinesApi
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.currentCoroutineContext
@@ -86,6 +87,7 @@ class RemoteHttpBackend @Inject constructor(
         _isLoaded = false
     }
 
+    @OptIn(InternalCoroutinesApi::class)
     override suspend fun generate(
         systemPrompt: String,
         messages: List<ChatMessage>,
