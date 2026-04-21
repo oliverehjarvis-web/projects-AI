@@ -7,7 +7,7 @@ import time
 import httpx
 
 OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434")
-DEFAULT_MODEL = os.environ.get("DEFAULT_MODEL", "gemma3:4b-it-q4_K_M")
+DEFAULT_MODEL = os.environ.get("DEFAULT_MODEL", "gemma4:2b")
 
 
 def wait_for_ollama(timeout: int = 120) -> bool:

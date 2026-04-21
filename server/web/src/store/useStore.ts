@@ -25,7 +25,7 @@ export const useStore = create<AppStore>((set) => ({
   messages: {},
   activeProjectId: null,
   activeChatId: null,
-  model: localStorage.getItem("model") ?? "gemma3:4b-it-q4_K_M",
+  model: localStorage.getItem("model") ?? "gemma4:2b",
 
   setProjects: (p) => set({ projects: p.filter((x) => !x.deleted_at) }),
   setChats: (projectId, c) =>

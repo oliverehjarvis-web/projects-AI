@@ -10,7 +10,7 @@ services:
       - API_TOKEN=${API_TOKEN}
       - OLLAMA_URL=http://ollama:11434
       - DATA_DIR=/data
-      - DEFAULT_MODEL=${DEFAULT_MODEL:-gemma3:4b-it-q4_K_M}
+      - DEFAULT_MODEL=${DEFAULT_MODEL:-gemma4:2b}
     volumes:
       - projects_data:/data
     depends_on:
