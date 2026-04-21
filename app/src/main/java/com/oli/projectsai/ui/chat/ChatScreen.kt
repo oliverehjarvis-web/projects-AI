@@ -15,7 +15,6 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -281,17 +280,11 @@ fun ChatScreen(
                     }
                 }
 
-                // Loading indicator
+                // Loading indicator — ticks an elapsed counter so the user can tell the model
+                // is still working during slow prompt processing on CPU.
                 if (isGenerating && streamingContent.isBlank()) {
                     item {
-                        Row(
-                            modifier = Modifier.padding(16.dp),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
-                            Text("Thinking...", style = MaterialTheme.typography.bodySmall)
-                        }
+                        ThinkingIndicator()
                     }
                 }
             }
@@ -367,16 +360,8 @@ fun ChatScreen(
                         modifier = Modifier.weight(1f),
                         placeholder = { Text("Message...") },
                         maxLines = 6,
-                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
-                        keyboardActions = KeyboardActions(
-                            onSend = {
-                                val hasContent = inputText.isNotBlank() || pendingAttachments.isNotEmpty()
-                                if (hasContent && !isGenerating) {
-                                    viewModel.sendMessage(inputText)
-                                    inputText = ""
-                                }
-                            }
-                        )
+                        // Default IME action lets Enter insert a newline; send is via the button.
+                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Default)
                     )
                     if (isGenerating) {
                         FilledIconButton(
@@ -435,6 +420,31 @@ fun ChatScreen(
             },
             onDismiss = { showMemoryDialog = false }
         )
+    }
+}
+
+@Composable
+private fun ThinkingIndicator() {
+    var elapsedSec by remember { mutableIntStateOf(0) }
+    LaunchedEffect(Unit) {
+        val started = System.currentTimeMillis()
+        while (true) {
+            elapsedSec = ((System.currentTimeMillis() - started) / 1000).toInt()
+            kotlinx.coroutines.delay(1000)
+        }
+    }
+    val label = when {
+        elapsedSec < 5 -> "Thinking…"
+        elapsedSec < 20 -> "Processing prompt… ${elapsedSec}s"
+        else -> "Still working… ${elapsedSec}s (large prompts can take a few minutes on CPU)"
+    }
+    Row(
+        modifier = Modifier.padding(16.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+        Text(label, style = MaterialTheme.typography.bodySmall)
     }
 }
 

@@ -42,9 +42,11 @@ export async function streamGenerate(
         return;
       }
       try {
-        const { token } = JSON.parse(payload) as { token: string };
-        onToken(token);
-      } catch {
+        const obj = JSON.parse(payload) as { token?: string; error?: string };
+        if (obj.error) throw new Error(obj.error);
+        if (obj.token) onToken(obj.token);
+      } catch (e) {
+        if (e instanceof Error && e.message) throw e;
         // ignore malformed lines
       }
     }

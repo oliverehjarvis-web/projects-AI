@@ -3,7 +3,9 @@ package com.oli.projectsai.inference
 import com.oli.projectsai.data.preferences.RemoteSettings
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flow
@@ -133,6 +135,11 @@ class RemoteHttpBackend @Inject constructor(
                 setRequestProperty("Authorization", "Bearer $token")
                 outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
             }
+            // BufferedReader.readLine() is a blocking syscall that job.cancel() cannot interrupt.
+            // Force-close the socket on cancellation so the read raises and the flow unwinds.
+            val cancelHook = currentCoroutineContext()[Job]?.invokeOnCompletion(onCancelling = true) {
+                runCatching { conn.disconnect() }
+            }
             try {
                 val code = conn.responseCode
                 if (code != 200) {
@@ -148,8 +155,16 @@ class RemoteHttpBackend @Inject constructor(
                         val payload = l.removePrefix("data: ")
                         if (payload == "[DONE]") return@flow
                         try {
-                            val chunk = JSONObject(payload).getString("token")
+                            val obj = JSONObject(payload)
+                            if (obj.has("error")) {
+                                throw InferenceError.GenerationFailed(
+                                    IllegalStateException(obj.getString("error"))
+                                )
+                            }
+                            val chunk = obj.optString("token", "")
                             if (chunk.isNotEmpty()) emit(chunk)
+                        } catch (ie: InferenceError) {
+                            throw ie
                         } catch (_: Exception) { /* skip malformed line */ }
                     }
                 }
@@ -163,6 +178,7 @@ class RemoteHttpBackend @Inject constructor(
             } catch (t: Throwable) {
                 throw InferenceError.GenerationFailed(t)
             } finally {
+                cancelHook?.dispose()
                 conn.disconnect()
             }
         }.flowOn(Dispatchers.IO)

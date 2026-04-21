@@ -61,7 +61,23 @@ async def _stream_ollama(req: InferenceRequest) -> AsyncIterator[str]:
         async with client.stream(
             "POST", f"{OLLAMA_URL}/api/chat", json=body
         ) as response:
-            response.raise_for_status()
+            if response.status_code != 200:
+                # Ollama returns errors as JSON like {"error": "model ... not found"}.
+                # Surface the body through the SSE stream so the client can show it
+                # instead of failing silently when e.g. a model is missing or OOMs.
+                detail = ""
+                try:
+                    raw = await response.aread()
+                    detail = raw.decode("utf-8", errors="replace")[:500]
+                    try:
+                        detail = json.loads(detail).get("error", detail)
+                    except Exception:
+                        pass
+                except Exception:
+                    pass
+                msg = f"Ollama HTTP {response.status_code}: {detail}" if detail else f"Ollama HTTP {response.status_code}"
+                yield f"data: {json.dumps({'error': msg})}\n\n"
+                return
             it = response.aiter_lines()
             while True:
                 try:

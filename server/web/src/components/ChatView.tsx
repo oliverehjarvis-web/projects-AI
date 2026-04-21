@@ -30,8 +30,17 @@ export default function ChatView() {
   const msgList = chatId ? (messages[chatId] ?? []) : [];
   const [input, setInput] = useState("");
   const [streaming, setStreaming] = useState(false);
+  const [thinkingSince, setThinkingSince] = useState<number | null>(null);
+  const [thinkingElapsed, setThinkingElapsed] = useState(0);
+  const [streamError, setStreamError] = useState<string | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const abortRef = useRef<AbortController | null>(null);
+
+  useEffect(() => {
+    if (thinkingSince === null) { setThinkingElapsed(0); return; }
+    const id = setInterval(() => setThinkingElapsed(Math.floor((Date.now() - thinkingSince) / 1000)), 1000);
+    return () => clearInterval(id);
+  }, [thinkingSince]);
 
   useEffect(() => {
     if (!chatId) return;
@@ -47,6 +56,8 @@ export default function ChatView() {
     const text = input.trim();
     setInput("");
     setStreaming(true);
+    setStreamError(null);
+    setThinkingSince(Date.now());
 
     const now = Date.now();
     const userMsg: Message = {
@@ -84,14 +95,20 @@ export default function ChatView() {
         systemPrompt,
         [...msgList, userMsg],
         model,
-        (token) => appendToken(chatId, streamingId, token),
-        () => setStreaming(false),
+        (token) => {
+          if (thinkingSince !== null) setThinkingSince(null);
+          appendToken(chatId, streamingId, token);
+        },
+        () => { setStreaming(false); setThinkingSince(null); },
         abortRef.current.signal
       );
-    } catch {
+    } catch (e) {
       setStreaming(false);
+      setThinkingSince(null);
+      const msg = e instanceof Error ? e.message : String(e);
+      if (!/abort/i.test(msg)) setStreamError(msg);
     }
-  }, [input, chatId, projectId, streaming, msgList, project, model, addMessage, appendToken]);
+  }, [input, chatId, projectId, streaming, msgList, project, model, addMessage, appendToken, thinkingSince]);
 
   const onKey = (e: React.KeyboardEvent) => {
     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
@@ -104,6 +121,23 @@ export default function ChatView() {
         {msgList.filter((m) => m.role !== "system").map((m) => (
           <MessageBubble key={m.remote_id} msg={m} />
         ))}
+        {streaming && thinkingSince !== null && (
+          <div style={{ color: "#888", fontSize: 13, padding: "8px 4px", fontStyle: "italic" }}>
+            {thinkingElapsed < 5
+              ? "Thinking…"
+              : thinkingElapsed < 20
+                ? `Processing prompt… ${thinkingElapsed}s`
+                : `Still working… ${thinkingElapsed}s (large prompts can take a few minutes on CPU)`}
+          </div>
+        )}
+        {streamError && (
+          <div style={{
+            background: "#3a1d1d", border: "1px solid #5a2a2a", color: "#f0a0a0",
+            borderRadius: 8, padding: "10px 12px", margin: "8px 0", fontSize: 13,
+          }}>
+            {streamError}
+          </div>
+        )}
         <div ref={bottomRef} />
       </div>
       <div style={s.inputRow}>
