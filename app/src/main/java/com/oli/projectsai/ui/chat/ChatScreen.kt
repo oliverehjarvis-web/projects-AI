@@ -49,7 +49,6 @@ import com.halilibo.richtext.markdown.Markdown
 import com.halilibo.richtext.ui.material3.RichText
 import com.oli.projectsai.data.db.entity.Message
 import com.oli.projectsai.data.db.entity.MessageRole
-import com.oli.projectsai.inference.TRANSCRIPTION_MAX_SECONDS
 import com.oli.projectsai.ui.components.TokenCounter
 import com.oli.projectsai.ui.memory.AddToMemoryDialog
 import java.io.File
@@ -68,6 +67,7 @@ fun ChatScreen(
     val chatTitle by viewModel.chatTitle.collectAsStateWithLifecycle()
     val pendingAttachments by viewModel.pendingAttachments.collectAsStateWithLifecycle()
     val dictationState by viewModel.dictationState.collectAsStateWithLifecycle()
+    val dictationRms by viewModel.dictationRms.collectAsStateWithLifecycle()
     val transcribedText by viewModel.transcribedText.collectAsStateWithLifecycle()
     val webSearchEnabled by viewModel.webSearchEnabled.collectAsStateWithLifecycle()
     val searchStatus by viewModel.searchStatus.collectAsStateWithLifecycle()
@@ -243,6 +243,7 @@ fun ChatScreen(
             // Dictation status banner
             DictationBanner(
                 state = dictationState,
+                rms = dictationRms,
                 onDismissError = { viewModel.dismissDictationError() }
             )
 
@@ -340,25 +341,20 @@ fun ChatScreen(
 
                     val isRecording = dictationState is ChatViewModel.DictationState.Recording
                     val isTranscribing = dictationState is ChatViewModel.DictationState.Transcribing
-                    val isPreparing = dictationState is ChatViewModel.DictationState.PreparingModel
-                    val dictationBusy = isTranscribing || isPreparing
                     if (isRecording) {
                         RecordingMicButton(onStop = { viewModel.stopDictation() })
                     } else {
                         IconButton(
                             onClick = {
-                                when {
-                                    dictationBusy -> Unit
-                                    else -> {
-                                        val granted = ContextCompat.checkSelfPermission(
-                                            context, Manifest.permission.RECORD_AUDIO
-                                        ) == PackageManager.PERMISSION_GRANTED
-                                        if (granted) viewModel.startDictation()
-                                        else micPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
-                                    }
+                                if (!isTranscribing) {
+                                    val granted = ContextCompat.checkSelfPermission(
+                                        context, Manifest.permission.RECORD_AUDIO
+                                    ) == PackageManager.PERMISSION_GRANTED
+                                    if (granted) viewModel.startDictation()
+                                    else micPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
                                 }
                             },
-                            enabled = !isGenerating && !dictationBusy
+                            enabled = !isGenerating && !isTranscribing
                         ) {
                             Icon(Icons.Default.Mic, "Dictate")
                         }
@@ -461,28 +457,11 @@ private fun ThinkingIndicator() {
 @Composable
 private fun DictationBanner(
     state: ChatViewModel.DictationState,
+    rms: Float,
     onDismissError: () -> Unit
 ) {
     when (state) {
-        is ChatViewModel.DictationState.PreparingModel -> {
-            Card(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 12.dp, vertical = 4.dp)
-            ) {
-                Row(
-                    modifier = Modifier.padding(12.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
-                    Text("Loading voice model…", style = MaterialTheme.typography.bodySmall)
-                }
-            }
-        }
         is ChatViewModel.DictationState.Recording -> {
-            val elapsedSec = (state.elapsedMs / 1000).toInt()
-            val remaining = (TRANSCRIPTION_MAX_SECONDS - elapsedSec).coerceAtLeast(0)
             Card(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -491,24 +470,27 @@ private fun DictationBanner(
                     containerColor = MaterialTheme.colorScheme.errorContainer
                 )
             ) {
-                Row(
-                    modifier = Modifier
-                        .padding(horizontal = 12.dp, vertical = 10.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    AudioWaveform(color = MaterialTheme.colorScheme.onErrorContainer)
-                    Text(
-                        "${elapsedSec}s",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onErrorContainer
-                    )
-                    Spacer(Modifier.weight(1f))
-                    Text(
-                        "${remaining}s left — tap stop when done",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onErrorContainer.copy(alpha = 0.7f)
-                    )
+                Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp)) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        AudioWaveform(rms = rms, color = MaterialTheme.colorScheme.onErrorContainer)
+                        Spacer(Modifier.weight(1f))
+                        Text(
+                            "Tap stop when done",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onErrorContainer.copy(alpha = 0.7f)
+                        )
+                    }
+                    if (state.partialText.isNotBlank()) {
+                        Text(
+                            state.partialText,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onErrorContainer,
+                            modifier = Modifier.padding(top = 4.dp)
+                        )
+                    }
                 }
             }
         }
@@ -524,7 +506,7 @@ private fun DictationBanner(
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
-                    Text("Transcribing…", style = MaterialTheme.typography.bodySmall)
+                    Text("Recognising…", style = MaterialTheme.typography.bodySmall)
                 }
             }
         }
@@ -587,11 +569,13 @@ private fun RecordingMicButton(onStop: () -> Unit) {
 }
 
 @Composable
-private fun AudioWaveform(color: androidx.compose.ui.graphics.Color) {
+private fun AudioWaveform(rms: Float, color: androidx.compose.ui.graphics.Color) {
     val transition = rememberInfiniteTransition(label = "waveform")
-    // 5 bars — centre tallest, staggered delays give a live-audio feel
     val barMaxHeights = listOf(10f, 16f, 22f, 16f, 10f)
     val barDelays    = listOf(0,   120,  240,  360,  480)
+    // Animate between fixed bounds so the spec is stable; scale at draw-time
+    // so bars shrink when silent and grow with the user's voice level.
+    val scale = 0.3f + 0.7f * rms
     val heights = barMaxHeights.zip(barDelays).map { (maxH, delay) ->
         transition.animateFloat(
             initialValue = 3f, targetValue = maxH,
@@ -611,7 +595,7 @@ private fun AudioWaveform(color: androidx.compose.ui.graphics.Color) {
             Box(
                 modifier = Modifier
                     .width(3.dp)
-                    .height(h.value.dp)
+                    .height((h.value * scale).dp)
                     .clip(RoundedCornerShape(2.dp))
                     .background(color)
             )
