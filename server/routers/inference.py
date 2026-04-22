@@ -28,6 +28,10 @@ _HEARTBEAT_INTERVAL_S = 10.0
 class InferenceMessage(BaseModel):
     role: str
     content: str
+    # Base64-encoded raw image bytes (no data URI prefix). Ollama's multimodal
+    # chat API consumes them via `images: [...]` on the message. Only meaningful
+    # on user messages and only when the upstream model is vision-capable.
+    images: list[str] = []
 
 
 class InferenceConfig(BaseModel):
@@ -65,7 +69,10 @@ async def _stream_ollama(req: InferenceRequest) -> AsyncIterator[str]:
     ollama_messages.append({"role": "system", "content": combined_system})
     for m in req.messages:
         role = "assistant" if m.role == "model" else m.role
-        ollama_messages.append({"role": role, "content": m.content})
+        msg: dict = {"role": role, "content": m.content}
+        if m.images:
+            msg["images"] = m.images
+        ollama_messages.append(msg)
 
     body = {
         "model": req.config.model,

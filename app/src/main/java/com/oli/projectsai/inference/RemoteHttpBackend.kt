@@ -14,6 +14,7 @@ import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.withContext
+import android.util.Base64
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.BufferedReader
@@ -113,6 +114,13 @@ class RemoteHttpBackend @Inject constructor(
                     put(JSONObject().apply {
                         put("role", m.role)
                         put("content", m.content)
+                        if (m.imageBytes.isNotEmpty()) {
+                            put("images", JSONArray().apply {
+                                m.imageBytes.forEach { bytes ->
+                                    put(Base64.encodeToString(bytes, Base64.NO_WRAP))
+                                }
+                            })
+                        }
                     })
                 }
             })
