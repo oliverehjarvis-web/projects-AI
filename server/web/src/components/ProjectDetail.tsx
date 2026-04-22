@@ -69,6 +69,7 @@ export default function ProjectDetail() {
   }, [projectId, setChats]);
 
   if (!project) return <div style={{ padding: 24, color: "#888" }}>Project not found.</div>;
+  if (project.is_secret) return <div style={{ padding: 24, color: "#888" }}>Project not found.</div>;
 
   const startEdit = () => {
     setDraft({ ...project });

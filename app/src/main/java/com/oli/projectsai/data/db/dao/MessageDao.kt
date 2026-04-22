@@ -6,10 +6,10 @@ import kotlinx.coroutines.flow.Flow
 
 @Dao
 interface MessageDao {
-    @Query("SELECT * FROM messages WHERE chatId = :chatId ORDER BY createdAt ASC")
+    @Query("SELECT * FROM messages WHERE chatId = :chatId AND deletedAt IS NULL ORDER BY createdAt ASC")
     fun getByChatFlow(chatId: Long): Flow<List<Message>>
 
-    @Query("SELECT * FROM messages WHERE chatId = :chatId ORDER BY createdAt ASC")
+    @Query("SELECT * FROM messages WHERE chatId = :chatId AND deletedAt IS NULL ORDER BY createdAt ASC")
     suspend fun getByChat(chatId: Long): List<Message>
 
     @Insert
@@ -18,11 +18,11 @@ interface MessageDao {
     @Update
     suspend fun update(message: Message)
 
-    @Delete
-    suspend fun delete(message: Message)
+    @Query("UPDATE messages SET deletedAt = :now, updatedAt = :now WHERE id = :id")
+    suspend fun softDelete(id: Long, now: Long = System.currentTimeMillis())
 
-    @Query("DELETE FROM messages WHERE chatId = :chatId")
-    suspend fun deleteByChat(chatId: Long)
+    @Query("UPDATE messages SET deletedAt = :now, updatedAt = :now WHERE chatId = :chatId AND deletedAt IS NULL")
+    suspend fun softDeleteByChat(chatId: Long, now: Long = System.currentTimeMillis())
 
     @Query("SELECT * FROM messages ORDER BY createdAt ASC")
     suspend fun getAllForSync(): List<Message>

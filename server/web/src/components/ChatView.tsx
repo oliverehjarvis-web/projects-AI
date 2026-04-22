@@ -136,6 +136,10 @@ export default function ChatView() {
     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
   };
 
+  if (project?.is_secret) {
+    return <div style={{ padding: 24, color: "#888" }}>Chat not found.</div>;
+  }
+
   return (
     <div style={s.page}>
       <div style={s.header}>{chat?.title ?? "Chat"}</div>

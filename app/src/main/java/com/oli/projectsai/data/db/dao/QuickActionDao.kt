@@ -6,10 +6,10 @@ import kotlinx.coroutines.flow.Flow
 
 @Dao
 interface QuickActionDao {
-    @Query("SELECT * FROM quick_actions WHERE projectId = :projectId ORDER BY sortOrder ASC")
+    @Query("SELECT * FROM quick_actions WHERE projectId = :projectId AND deletedAt IS NULL ORDER BY sortOrder ASC")
     fun getByProject(projectId: Long): Flow<List<QuickAction>>
 
-    @Query("SELECT * FROM quick_actions WHERE id = :id")
+    @Query("SELECT * FROM quick_actions WHERE id = :id AND deletedAt IS NULL")
     suspend fun getById(id: Long): QuickAction?
 
     @Insert
@@ -18,8 +18,11 @@ interface QuickActionDao {
     @Update
     suspend fun update(action: QuickAction)
 
-    @Delete
-    suspend fun delete(action: QuickAction)
+    @Query("UPDATE quick_actions SET deletedAt = :now, updatedAt = :now WHERE id = :id")
+    suspend fun softDelete(id: Long, now: Long = System.currentTimeMillis())
+
+    @Query("UPDATE quick_actions SET deletedAt = :now, updatedAt = :now WHERE projectId = :projectId AND deletedAt IS NULL")
+    suspend fun softDeleteByProject(projectId: Long, now: Long = System.currentTimeMillis())
 
     @Query("SELECT * FROM quick_actions ORDER BY sortOrder ASC")
     suspend fun getAllForSync(): List<QuickAction>

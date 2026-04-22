@@ -51,6 +51,8 @@ export default function ProjectList() {
     fetchProjects().then(setProjects).catch(console.error);
   }, [setProjects]);
 
+  const visible = projects.filter((p) => !p.is_secret);
+
   const handleCreate = async () => {
     if (!name.trim()) return;
     setBusy(true);
@@ -86,8 +88,8 @@ export default function ProjectList() {
         <div style={s.title}>Projects</div>
         <button style={s.btn} onClick={() => setDialogOpen(true)}>+ New project</button>
       </div>
-      {projects.length === 0 && <p style={{ color: "#666" }}>No projects yet. Create one to get started.</p>}
-      {projects.map((p) => (
+      {visible.length === 0 && <p style={{ color: "#666" }}>No projects yet. Create one to get started.</p>}
+      {visible.map((p) => (
         <div key={p.remote_id} style={s.card} onClick={() => nav(`/projects/${p.remote_id}`)}>
           <div style={{ flex: 1 }}>
             <div style={s.name}>{p.name}</div>

@@ -6,10 +6,10 @@ import kotlinx.coroutines.flow.Flow
 
 @Dao
 interface ChatDao {
-    @Query("SELECT * FROM chats WHERE projectId = :projectId ORDER BY updatedAt DESC")
+    @Query("SELECT * FROM chats WHERE projectId = :projectId AND deletedAt IS NULL ORDER BY updatedAt DESC")
     fun getByProject(projectId: Long): Flow<List<Chat>>
 
-    @Query("SELECT * FROM chats WHERE id = :id")
+    @Query("SELECT * FROM chats WHERE id = :id AND deletedAt IS NULL")
     suspend fun getById(id: Long): Chat?
 
     @Insert
@@ -18,11 +18,17 @@ interface ChatDao {
     @Update
     suspend fun update(chat: Chat)
 
-    @Delete
-    suspend fun delete(chat: Chat)
+    // Soft-delete: stamp deletedAt so the next sync push tombstones the chat on
+    // the server. A hard DELETE would drop the row locally before the push
+    // iterates it, which is how the web ended up seeing ghost chats.
+    @Query("UPDATE chats SET deletedAt = :now, updatedAt = :now WHERE id = :id")
+    suspend fun softDelete(id: Long, now: Long = System.currentTimeMillis())
 
-    @Query("DELETE FROM chats WHERE id IN (:ids)")
-    suspend fun deleteByIds(ids: List<Long>)
+    @Query("UPDATE chats SET deletedAt = :now, updatedAt = :now WHERE id IN (:ids)")
+    suspend fun softDeleteByIds(ids: List<Long>, now: Long = System.currentTimeMillis())
+
+    @Query("UPDATE chats SET deletedAt = :now, updatedAt = :now WHERE projectId = :projectId AND deletedAt IS NULL")
+    suspend fun softDeleteByProject(projectId: Long, now: Long = System.currentTimeMillis())
 
     @Query("UPDATE chats SET title = :title, updatedAt = :now WHERE id = :chatId")
     suspend fun updateTitle(chatId: Long, title: String, now: Long = System.currentTimeMillis())

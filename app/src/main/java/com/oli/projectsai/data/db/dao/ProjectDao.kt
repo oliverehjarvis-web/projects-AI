@@ -6,16 +6,16 @@ import kotlinx.coroutines.flow.Flow
 
 @Dao
 interface ProjectDao {
-    @Query("SELECT * FROM projects WHERE isSecret = 0 ORDER BY updatedAt DESC")
+    @Query("SELECT * FROM projects WHERE isSecret = 0 AND deletedAt IS NULL ORDER BY updatedAt DESC")
     fun getAll(): Flow<List<Project>>
 
-    @Query("SELECT * FROM projects WHERE isSecret = 1 ORDER BY updatedAt DESC")
+    @Query("SELECT * FROM projects WHERE isSecret = 1 AND deletedAt IS NULL ORDER BY updatedAt DESC")
     fun getSecretAll(): Flow<List<Project>>
 
-    @Query("SELECT * FROM projects WHERE id = :id")
+    @Query("SELECT * FROM projects WHERE id = :id AND deletedAt IS NULL")
     suspend fun getById(id: Long): Project?
 
-    @Query("SELECT * FROM projects WHERE id = :id")
+    @Query("SELECT * FROM projects WHERE id = :id AND deletedAt IS NULL")
     fun getByIdFlow(id: Long): Flow<Project?>
 
     @Insert
@@ -24,8 +24,8 @@ interface ProjectDao {
     @Update
     suspend fun update(project: Project)
 
-    @Delete
-    suspend fun delete(project: Project)
+    @Query("UPDATE projects SET deletedAt = :now, updatedAt = :now WHERE id = :id")
+    suspend fun softDelete(id: Long, now: Long = System.currentTimeMillis())
 
     @Query("UPDATE projects SET accumulatedMemory = :memory, updatedAt = :now WHERE id = :projectId")
     suspend fun updateMemory(projectId: Long, memory: String, now: Long = System.currentTimeMillis())

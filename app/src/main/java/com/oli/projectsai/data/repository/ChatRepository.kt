@@ -26,9 +26,20 @@ class ChatRepository @Inject constructor(
     suspend fun updateWebSearchEnabled(chatId: Long, enabled: Boolean) =
         chatDao.updateWebSearchEnabled(chatId, enabled)
 
-    suspend fun deleteChat(chat: Chat) = chatDao.delete(chat)
+    suspend fun deleteChat(chat: Chat) {
+        // Soft-delete: tombstone locally and cascade to this chat's messages so
+        // the UI hides them instantly; the next SyncRepository push forwards
+        // the deleted_at timestamps to the server.
+        val now = System.currentTimeMillis()
+        messageDao.softDeleteByChat(chat.id, now)
+        chatDao.softDelete(chat.id, now)
+    }
 
-    suspend fun deleteChats(ids: List<Long>) = chatDao.deleteByIds(ids)
+    suspend fun deleteChats(ids: List<Long>) {
+        val now = System.currentTimeMillis()
+        ids.forEach { id -> messageDao.softDeleteByChat(id, now) }
+        chatDao.softDeleteByIds(ids, now)
+    }
 
     fun getMessagesFlow(chatId: Long): Flow<List<Message>> = messageDao.getByChatFlow(chatId)
 
