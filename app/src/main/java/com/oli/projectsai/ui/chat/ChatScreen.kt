@@ -7,6 +7,14 @@ import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -15,6 +23,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
@@ -331,28 +340,28 @@ fun ChatScreen(
 
                     val isRecording = dictationState is ChatViewModel.DictationState.Recording
                     val isTranscribing = dictationState is ChatViewModel.DictationState.Transcribing
-                    IconButton(
-                        onClick = {
-                            when {
-                                isRecording -> viewModel.stopDictation()
-                                isTranscribing -> Unit
-                                else -> {
-                                    val granted = ContextCompat.checkSelfPermission(
-                                        context, Manifest.permission.RECORD_AUDIO
-                                    ) == PackageManager.PERMISSION_GRANTED
-                                    if (granted) viewModel.startDictation()
-                                    else micPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                    val isPreparing = dictationState is ChatViewModel.DictationState.PreparingModel
+                    val dictationBusy = isTranscribing || isPreparing
+                    if (isRecording) {
+                        RecordingMicButton(onStop = { viewModel.stopDictation() })
+                    } else {
+                        IconButton(
+                            onClick = {
+                                when {
+                                    dictationBusy -> Unit
+                                    else -> {
+                                        val granted = ContextCompat.checkSelfPermission(
+                                            context, Manifest.permission.RECORD_AUDIO
+                                        ) == PackageManager.PERMISSION_GRANTED
+                                        if (granted) viewModel.startDictation()
+                                        else micPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                                    }
                                 }
-                            }
-                        },
-                        enabled = !isGenerating && !isTranscribing
-                    ) {
-                        Icon(
-                            if (isRecording) Icons.Default.Stop else Icons.Default.Mic,
-                            if (isRecording) "Stop dictation" else "Dictate",
-                            tint = if (isRecording) MaterialTheme.colorScheme.error
-                            else LocalContentColor.current
-                        )
+                            },
+                            enabled = !isGenerating && !dictationBusy
+                        ) {
+                            Icon(Icons.Default.Mic, "Dictate")
+                        }
                     }
 
                     OutlinedTextField(
@@ -455,6 +464,22 @@ private fun DictationBanner(
     onDismissError: () -> Unit
 ) {
     when (state) {
+        is ChatViewModel.DictationState.PreparingModel -> {
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 12.dp, vertical = 4.dp)
+            ) {
+                Row(
+                    modifier = Modifier.padding(12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                    Text("Loading voice model…", style = MaterialTheme.typography.bodySmall)
+                }
+            }
+        }
         is ChatViewModel.DictationState.Recording -> {
             val elapsedSec = (state.elapsedMs / 1000).toInt()
             val remaining = (TRANSCRIPTION_MAX_SECONDS - elapsedSec).coerceAtLeast(0)
@@ -467,19 +492,22 @@ private fun DictationBanner(
                 )
             ) {
                 Row(
-                    modifier = Modifier.padding(12.dp),
+                    modifier = Modifier
+                        .padding(horizontal = 12.dp, vertical = 10.dp),
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
-                    Icon(
-                        Icons.Default.Mic,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.onErrorContainer
-                    )
+                    AudioWaveform(color = MaterialTheme.colorScheme.onErrorContainer)
                     Text(
-                        "Recording… ${elapsedSec}s (${remaining}s left)",
+                        "${elapsedSec}s",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onErrorContainer
+                    )
+                    Spacer(Modifier.weight(1f))
+                    Text(
+                        "${remaining}s left — tap stop when done",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onErrorContainer.copy(alpha = 0.7f)
                     )
                 }
             }
@@ -526,6 +554,68 @@ private fun DictationBanner(
             }
         }
         ChatViewModel.DictationState.Idle -> Unit
+    }
+}
+
+@Composable
+private fun RecordingMicButton(onStop: () -> Unit) {
+    val pulse = rememberInfiniteTransition(label = "mic-pulse")
+    val scale by pulse.animateFloat(
+        initialValue = 1f, targetValue = 2.2f,
+        animationSpec = infiniteRepeatable(tween(900, easing = LinearEasing), RepeatMode.Restart),
+        label = "scale"
+    )
+    val alpha by pulse.animateFloat(
+        initialValue = 0.45f, targetValue = 0f,
+        animationSpec = infiniteRepeatable(tween(900, easing = LinearEasing), RepeatMode.Restart),
+        label = "alpha"
+    )
+    val errorColor = MaterialTheme.colorScheme.error
+    Box(contentAlignment = Alignment.Center, modifier = Modifier.size(48.dp)) {
+        Canvas(modifier = Modifier.fillMaxSize()) {
+            drawCircle(color = errorColor.copy(alpha = alpha), radius = size.minDimension / 2 * scale)
+        }
+        FilledIconButton(
+            onClick = onStop,
+            colors = IconButtonDefaults.filledIconButtonColors(
+                containerColor = MaterialTheme.colorScheme.error
+            )
+        ) {
+            Icon(Icons.Default.Stop, "Stop recording")
+        }
+    }
+}
+
+@Composable
+private fun AudioWaveform(color: androidx.compose.ui.graphics.Color) {
+    val transition = rememberInfiniteTransition(label = "waveform")
+    // 5 bars — centre tallest, staggered delays give a live-audio feel
+    val barMaxHeights = listOf(10f, 16f, 22f, 16f, 10f)
+    val barDelays    = listOf(0,   120,  240,  360,  480)
+    val heights = barMaxHeights.zip(barDelays).map { (maxH, delay) ->
+        transition.animateFloat(
+            initialValue = 3f, targetValue = maxH,
+            animationSpec = infiniteRepeatable(
+                tween(500, delayMillis = delay, easing = FastOutSlowInEasing),
+                RepeatMode.Reverse
+            ),
+            label = "bar-$delay"
+        )
+    }
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(3.dp),
+        modifier = Modifier.height(24.dp)
+    ) {
+        heights.forEach { h ->
+            Box(
+                modifier = Modifier
+                    .width(3.dp)
+                    .height(h.value.dp)
+                    .clip(RoundedCornerShape(2.dp))
+                    .background(color)
+            )
+        }
     }
 }
 

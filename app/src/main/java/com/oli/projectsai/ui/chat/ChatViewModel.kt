@@ -12,6 +12,7 @@ import com.oli.projectsai.data.db.entity.Chat
 import com.oli.projectsai.data.db.entity.Message
 import com.oli.projectsai.data.db.entity.MessageRole
 import com.oli.projectsai.data.preferences.GlobalContextStore
+import com.oli.projectsai.data.preferences.VoiceSettings
 import com.oli.projectsai.data.repository.ChatRepository
 import com.oli.projectsai.data.repository.ProjectRepository
 import com.oli.projectsai.inference.AudioCapture
@@ -23,9 +24,12 @@ import com.oli.projectsai.inference.GenerationForegroundService
 import com.oli.projectsai.inference.GenerationParams
 import com.oli.projectsai.inference.InferenceError
 import com.oli.projectsai.inference.InferenceManager
+import com.oli.projectsai.inference.ModelInfo
+import com.oli.projectsai.inference.ModelPrecision
 import com.oli.projectsai.inference.ModelState
 import com.oli.projectsai.inference.SummarisationPrompts
 import com.oli.projectsai.inference.TRANSCRIPTION_MAX_SECONDS
+import java.io.File
 import com.oli.projectsai.ui.common.copyToClipboard
 import com.oli.projectsai.ui.common.shareText
 import com.oli.projectsai.ui.components.TokenBreakdown
@@ -54,6 +58,7 @@ class ChatViewModel @Inject constructor(
     private val attachmentStore: AttachmentStore,
     private val audioCapture: AudioCapture,
     private val generationController: GenerationController,
+    private val voiceSettings: VoiceSettings,
     @ApplicationContext private val appContext: Context
 ) : ViewModel() {
 
@@ -105,6 +110,7 @@ class ChatViewModel @Inject constructor(
 
     sealed class DictationState {
         data object Idle : DictationState()
+        data object PreparingModel : DictationState()
         data class Recording(val elapsedMs: Long) : DictationState()
         data object Transcribing : DictationState()
         data class Error(val message: String) : DictationState()
@@ -347,12 +353,34 @@ class ChatViewModel @Inject constructor(
 
     fun startDictation() {
         if (dictationJob?.isActive == true) return
-        if (!isModelLoaded) {
-            _dictationState.value = DictationState.Error("Load a model first.")
-            return
-        }
         _transcribedText.value = null
         dictationJob = viewModelScope.launch {
+            // Transcription always uses the local backend regardless of which backend is
+            // active for chat. Load the voice model on demand if it isn't resident yet.
+            if (!inferenceManager.localBackendReady) {
+                val path = voiceSettings.voiceModelPath.first()
+                if (path.isBlank() || !File(path).exists()) {
+                    _dictationState.value = DictationState.Error(
+                        "No voice model set. Pick one in Settings → Voice transcription."
+                    )
+                    return@launch
+                }
+                _dictationState.value = DictationState.PreparingModel
+                try {
+                    inferenceManager.prepareLocalForTranscription(
+                        ModelInfo(
+                            name = File(path).nameWithoutExtension,
+                            precision = ModelPrecision.Q4,
+                            filePath = path
+                        )
+                    )
+                } catch (t: Throwable) {
+                    _dictationState.value = DictationState.Error(
+                        t.message ?: "Failed to load voice model"
+                    )
+                    return@launch
+                }
+            }
             try {
                 audioCapture.start()
             } catch (t: Throwable) {
@@ -400,7 +428,7 @@ class ChatViewModel @Inject constructor(
             return
         }
         try {
-            val text = inferenceManager.transcribe(bytes).trim()
+            val text = inferenceManager.transcribeViaLocal(bytes).trim()
             _transcribedText.value = text
             _dictationState.value = DictationState.Idle
         } catch (t: Throwable) {
