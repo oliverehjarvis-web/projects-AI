@@ -97,6 +97,24 @@ class InferenceManager @Inject constructor(
         return backend.transcribe(pcm16MonoBytes)
     }
 
+    /**
+     * Loads [voiceModel] into the on-device backend if nothing is loaded yet, leaving the
+     * engine warm for subsequent transcribe calls. Does NOT touch [_modelState] — the chat
+     * UI keeps showing whichever backend/model the user actually picked for chat.
+     */
+    suspend fun prepareLocalForTranscription(voiceModel: ModelInfo) {
+        if (!localBackend.isLoaded) localBackend.loadModel(voiceModel)
+    }
+
+    /** Transcribes via the on-device backend regardless of which backend is active for chat. */
+    suspend fun transcribeViaLocal(pcm16MonoBytes: ByteArray): String {
+        if (!localBackend.isLoaded) throw InferenceError.ModelNotLoaded
+        return localBackend.transcribe(pcm16MonoBytes)
+    }
+
+    /** True when the local backend has a model resident and ready for transcription. */
+    val localBackendReady: Boolean get() = localBackend.isLoaded
+
     /** Returns 0 when no backend is active rather than crashing — callers must tolerate this. */
     suspend fun countTokens(text: String, backendId: String? = null): Int {
         val backend = if (backendId != null) {

@@ -3,9 +3,11 @@ package com.oli.projectsai.ui.transcription
 import android.content.Context
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.oli.projectsai.data.preferences.VoiceSettings
 import com.oli.projectsai.inference.AudioCapture
 import com.oli.projectsai.inference.InferenceManager
-import com.oli.projectsai.inference.ModelState
+import com.oli.projectsai.inference.ModelInfo
+import com.oli.projectsai.inference.ModelPrecision
 import com.oli.projectsai.inference.TRANSCRIPTION_MAX_SECONDS
 import com.oli.projectsai.ui.common.copyToClipboard
 import com.oli.projectsai.ui.common.shareText
@@ -16,18 +18,22 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import java.io.File
 import javax.inject.Inject
 
 @HiltViewModel
 class TranscriptionViewModel @Inject constructor(
     @ApplicationContext private val context: Context,
     private val inferenceManager: InferenceManager,
-    private val audioCapture: AudioCapture
+    private val audioCapture: AudioCapture,
+    private val voiceSettings: VoiceSettings
 ) : ViewModel() {
 
     sealed class RecordingState {
         data object Idle : RecordingState()
+        data object PreparingModel : RecordingState()
         data class Recording(val elapsedMs: Long) : RecordingState()
         data object Transcribing : RecordingState()
         data class Done(val text: String) : RecordingState()
@@ -41,13 +47,32 @@ class TranscriptionViewModel @Inject constructor(
     private var startedAt: Long = 0L
 
     fun start() {
-        if (inferenceManager.modelState.value !is ModelState.Loaded) {
-            _state.value = RecordingState.Error(
-                "Load a model before transcribing.",
-                needsModel = true
-            )
+        if (inferenceManager.localBackendReady) {
+            beginRecording()
             return
         }
+        // Lazy-load the on-device voice model on first mic press in this session.
+        viewModelScope.launch {
+            val path = voiceSettings.voiceModelPath.first()
+            if (path.isBlank() || !File(path).exists()) {
+                _state.value = RecordingState.Error(
+                    "Pick a voice transcription model in Settings → Voice transcription.",
+                    needsModel = true
+                )
+                return@launch
+            }
+            _state.value = RecordingState.PreparingModel
+            try {
+                inferenceManager.prepareLocalForTranscription(voiceModelFor(path))
+            } catch (t: Throwable) {
+                _state.value = RecordingState.Error(t.message ?: "Failed to load voice model")
+                return@launch
+            }
+            beginRecording()
+        }
+    }
+
+    private fun beginRecording() {
         try {
             audioCapture.start()
         } catch (t: Throwable) {
@@ -85,7 +110,7 @@ class TranscriptionViewModel @Inject constructor(
         _state.value = RecordingState.Transcribing
         viewModelScope.launch {
             try {
-                val text = inferenceManager.transcribe(pcm)
+                val text = inferenceManager.transcribeViaLocal(pcm)
                 _state.value = if (text.isBlank()) {
                     RecordingState.Error("Transcription was empty — try speaking closer to the mic.")
                 } else {
@@ -112,5 +137,14 @@ class TranscriptionViewModel @Inject constructor(
         tickJob?.cancel()
         audioCapture.cancel()
         super.onCleared()
+    }
+
+    private fun voiceModelFor(path: String): ModelInfo {
+        val file = File(path)
+        return ModelInfo(
+            name = file.nameWithoutExtension,
+            precision = ModelPrecision.Q4,
+            filePath = path
+        )
     }
 }

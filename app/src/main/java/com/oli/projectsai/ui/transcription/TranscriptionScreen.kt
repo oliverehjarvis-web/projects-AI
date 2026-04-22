@@ -62,7 +62,8 @@ fun TranscriptionScreen(
         },
         floatingActionButton = {
             val isRecording = state is TranscriptionViewModel.RecordingState.Recording
-            val isBusy = state is TranscriptionViewModel.RecordingState.Transcribing
+            val isBusy = state is TranscriptionViewModel.RecordingState.Transcribing ||
+                state is TranscriptionViewModel.RecordingState.PreparingModel
             FloatingActionButton(
                 onClick = {
                     if (isBusy) return@FloatingActionButton
@@ -85,7 +86,8 @@ fun TranscriptionScreen(
                             }
                         }
                         is TranscriptionViewModel.RecordingState.Recording -> viewModel.stop()
-                        is TranscriptionViewModel.RecordingState.Transcribing -> Unit
+                        is TranscriptionViewModel.RecordingState.Transcribing,
+                        is TranscriptionViewModel.RecordingState.PreparingModel -> Unit
                     }
                 },
                 containerColor = when {
@@ -110,6 +112,8 @@ fun TranscriptionScreen(
         ) {
             when (val s = state) {
                 is TranscriptionViewModel.RecordingState.Idle -> IdleContent()
+
+                is TranscriptionViewModel.RecordingState.PreparingModel -> PreparingModelContent()
 
                 is TranscriptionViewModel.RecordingState.Recording -> RecordingContent(s.elapsedMs)
 
@@ -171,7 +175,7 @@ private fun IdleContent() {
                 tint = MaterialTheme.colorScheme.onSurfaceVariant
             )
             Text(
-                "Tap the mic to record. Audio is transcribed on-device using the loaded model (up to ${TRANSCRIPTION_MAX_SECONDS}s).",
+                "Tap the mic to record. Audio is transcribed on-device by the voice model picked in Settings (up to ${TRANSCRIPTION_MAX_SECONDS}s).",
                 style = MaterialTheme.typography.bodyLarge,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -214,6 +218,28 @@ private fun RecordingContent(elapsedMs: Long) {
         style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant
     )
+}
+
+@Composable
+private fun PreparingModelContent() {
+    Column(
+        modifier = Modifier.fillMaxSize(),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center
+    ) {
+        CircularProgressIndicator(modifier = Modifier.size(48.dp))
+        Spacer(Modifier.height(16.dp))
+        Text(
+            "Loading on-device voice model…",
+            style = MaterialTheme.typography.bodyLarge
+        )
+        Spacer(Modifier.height(4.dp))
+        Text(
+            "First mic press of the session — usually 5–15s on this device. Stays warm afterwards.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+    }
 }
 
 @Composable

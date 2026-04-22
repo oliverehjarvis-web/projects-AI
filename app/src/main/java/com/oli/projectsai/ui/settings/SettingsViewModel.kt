@@ -10,6 +10,7 @@ import com.oli.projectsai.BuildConfig
 import com.oli.projectsai.data.preferences.RemoteSettings
 import com.oli.projectsai.data.preferences.SearchDepth
 import com.oli.projectsai.data.preferences.SearchSettings
+import com.oli.projectsai.data.preferences.VoiceSettings
 import com.oli.projectsai.data.sync.SyncRepository
 import com.oli.projectsai.data.sync.SyncResult
 import com.oli.projectsai.data.update.UpdateChecker
@@ -67,6 +68,7 @@ class SettingsViewModel @Inject constructor(
     private val updateChecker: UpdateChecker,
     private val searchSettings: SearchSettings,
     private val remoteSettings: RemoteSettings,
+    private val voiceSettings: VoiceSettings,
     private val syncRepository: SyncRepository
 ) : ViewModel() {
 
@@ -105,6 +107,33 @@ class SettingsViewModel @Inject constructor(
     val remoteModel: StateFlow<String> = remoteSettings.defaultModel.stateIn(
         viewModelScope, SharingStarted.Eagerly, ""
     )
+    val voiceModelPath: StateFlow<String> = voiceSettings.voiceModelPath.stateIn(
+        viewModelScope, SharingStarted.Eagerly, ""
+    )
+
+    private val _voiceModelOptions = MutableStateFlow<List<ModelFile>>(emptyList())
+    val voiceModelOptions: StateFlow<List<ModelFile>> = _voiceModelOptions.asStateFlow()
+
+    fun refreshVoiceModelOptions() {
+        val dir = File(context.getExternalFilesDir(null), "models")
+        val files = dir.listFiles()
+            ?.filter { it.extension in setOf("task", "bin", "litertlm") }
+            ?.map { ModelFile(it.name, it.absolutePath) }
+            ?: emptyList()
+        _voiceModelOptions.value = files
+        // Default-pick Gemma 4 E4B if nothing chosen yet and it's on disk.
+        viewModelScope.launch {
+            if (voiceSettings.voiceModelPath.first().isBlank()) {
+                val preferred = files.firstOrNull { it.name.contains("E4B", ignoreCase = true) }
+                    ?: files.firstOrNull()
+                preferred?.let { voiceSettings.setVoiceModelPath(it.path) }
+            }
+        }
+    }
+
+    fun setVoiceModelPath(path: String) {
+        viewModelScope.launch { voiceSettings.setVoiceModelPath(path) }
+    }
 
     private val _syncState = MutableStateFlow<SyncState>(SyncState.Idle)
     val syncState: StateFlow<SyncState> = _syncState.asStateFlow()
@@ -124,6 +153,7 @@ class SettingsViewModel @Inject constructor(
             val token = remoteSettings.apiToken.first()
             if (url.isNotBlank() && token.isNotBlank()) fetchRemoteModels(url, token)
         }
+        refreshVoiceModelOptions()
     }
 
     fun fetchRemoteModels(url: String, token: String) {

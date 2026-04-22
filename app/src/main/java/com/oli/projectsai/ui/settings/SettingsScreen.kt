@@ -43,6 +43,8 @@ fun SettingsScreen(
     val remoteError by viewModel.remoteError.collectAsStateWithLifecycle()
     val pullState by viewModel.pullState.collectAsStateWithLifecycle()
     val syncState by viewModel.syncState.collectAsStateWithLifecycle()
+    val voiceModelPath by viewModel.voiceModelPath.collectAsStateWithLifecycle()
+    val voiceModelOptions by viewModel.voiceModelOptions.collectAsStateWithLifecycle()
 
     // Auto-launch installer when APK is ready
     val currentUpdateState = updateState
@@ -153,6 +155,22 @@ fun SettingsScreen(
                 onCancelPull = { viewModel.cancelPull() },
                 onSync = { viewModel.syncNow() },
                 onDismissSync = { viewModel.dismissSyncState() }
+            )
+
+            HorizontalDivider()
+
+            // Voice transcription section
+            Text(
+                "Voice transcription",
+                style = MaterialTheme.typography.titleSmall,
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)
+            )
+            VoiceModelSelector(
+                currentPath = voiceModelPath,
+                options = voiceModelOptions,
+                onSelect = { viewModel.setVoiceModelPath(it) },
+                onRefresh = { viewModel.refreshVoiceModelOptions() },
+                onOpenModelManagement = onModelManagement
             )
 
             HorizontalDivider()
@@ -674,6 +692,76 @@ private fun RemoteServerSection(
                 color = MaterialTheme.colorScheme.error
             )
             else -> Unit
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun VoiceModelSelector(
+    currentPath: String,
+    options: List<ModelFile>,
+    onSelect: (String) -> Unit,
+    onRefresh: () -> Unit,
+    onOpenModelManagement: () -> Unit
+) {
+    LaunchedEffect(Unit) { onRefresh() }
+    var expanded by remember { mutableStateOf(false) }
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 4.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        Text(
+            "Audio is transcribed on-device by this model when you tap the mic, even when chat " +
+                "is set to a remote backend. The model loads on first use and stays warm for " +
+                "the rest of the session.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        if (options.isEmpty()) {
+            Text(
+                "No on-device models found. Download one in Model Management first.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error
+            )
+            OutlinedButton(onClick = onOpenModelManagement) {
+                Text("Open Model Management")
+            }
+        } else {
+            ExposedDropdownMenuBox(
+                expanded = expanded,
+                onExpandedChange = { expanded = it }
+            ) {
+                val selectedLabel = options.find { it.path == currentPath }?.name
+                    ?: "Select a voice model"
+                OutlinedTextField(
+                    value = selectedLabel,
+                    onValueChange = {},
+                    readOnly = true,
+                    label = { Text("Voice model") },
+                    trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded) },
+                    modifier = Modifier
+                        .menuAnchor()
+                        .fillMaxWidth()
+                )
+                ExposedDropdownMenu(
+                    expanded = expanded,
+                    onDismissRequest = { expanded = false }
+                ) {
+                    options.forEach { opt ->
+                        DropdownMenuItem(
+                            text = { Text(opt.name) },
+                            onClick = {
+                                onSelect(opt.path)
+                                expanded = false
+                            }
+                        )
+                    }
+                }
+            }
         }
     }
 }
