@@ -39,7 +39,7 @@ class InferenceMessage(BaseModel):
 class InferenceConfig(BaseModel):
     model: str = DEFAULT_MODEL
     max_tokens: int = 2048
-    temperature: float = 0.7
+    temperature: float = 0.4
     top_p: float = 0.95
     # When False the _REASONING_PREAMBLE is omitted from the system prompt. Set to
     # False for Quick Actions and other short-form requests that need direct responses.
@@ -56,30 +56,14 @@ class InferenceRequest(BaseModel):
     global_rules: str | None = None
 
 
-# Prefix prepended to every system prompt. Two jobs:
-#   1. Scale reasoning depth to the request — a greeting should not trigger
-#      paragraphs of deliberation.
-#   2. Soft-frame the project/global guidelines so the model doesn't fall into a
-#      rule-checking loop where it re-evaluates each constraint against each
-#      draft. Explicitly license it to deviate (with a short note) rather than
-#      keep ruminating.
-#   3. Give it an explicit stop-condition for thinking: if it revisits the same
-#      concern twice, commit and state the remaining uncertainty.
+# Prefix prepended to every system prompt when apply_default_preamble is True.
+# Keep this minimal — reasoning models are RL-trained to manage their own
+# thinking budget. Telling them *how* to think (stop-conditions, checklists)
+# causes meta-reasoning loops that make the problem worse.
 _REASONING_PREAMBLE = (
-    "Match the depth of your reasoning to the complexity of the user's request. "
-    "For simple greetings, one-word answers, or short factual replies, respond "
-    "directly with little or no internal deliberation.\n\n"
-    "The project and user guidelines below are soft preferences, not hard rules. "
-    "Apply them naturally as background context. If a specific request is better "
-    "served by deviating from a guideline, deviate — but add one short line at the "
-    "end of your answer explaining what you broke and why (e.g. \"Note: used "
-    "American spelling here because the user quoted American sources\"). Do not "
-    "re-analyse these guidelines on every turn; treat them like a colleague's "
-    "standing preferences rather than a checklist.\n\n"
-    "Thinking stop-condition: if you notice yourself revisiting the same concern "
-    "a second time, stop deliberating. Commit to your best current answer and, if "
-    "anything is still uncertain, surface that uncertainty in one line of the "
-    "final reply. Never loop over the same three points — decide and move on."
+    "Match the depth of your reasoning to the complexity of the request. "
+    "Simple questions get direct, concise answers. "
+    "Apply the user's guidelines as natural background context, not a checklist."
 )
 
 
