@@ -1,5 +1,6 @@
 package com.oli.projectsai.inference
 
+import com.oli.projectsai.di.ApplicationScope
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -8,8 +9,6 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.Dispatchers
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -26,7 +25,8 @@ sealed class ModelState {
 @Singleton
 class InferenceManager @Inject constructor(
     private val localBackend: LocalMediaPipeBackend,
-    private val remoteBackend: RemoteHttpBackend
+    private val remoteBackend: RemoteHttpBackend,
+    @ApplicationScope private val scope: CoroutineScope
 ) {
     private val _modelState = MutableStateFlow<ModelState>(ModelState.Unloaded)
     val modelState: StateFlow<ModelState> = _modelState.asStateFlow()
@@ -37,8 +37,6 @@ class InferenceManager @Inject constructor(
      */
     private val _tokenizerVersion = MutableStateFlow(0L)
     val tokenizerVersion: StateFlow<Long> = _tokenizerVersion.asStateFlow()
-
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
     val contextLimitFlow: StateFlow<Int> = _modelState
         .map { (it as? ModelState.Loaded)?.modelInfo?.contextLength ?: DEFAULT_CONTEXT_LENGTH }

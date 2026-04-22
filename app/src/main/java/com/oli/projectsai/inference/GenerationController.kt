@@ -8,11 +8,11 @@ import com.oli.projectsai.data.preferences.SearchSettings
 import com.oli.projectsai.data.repository.ChatRepository
 import com.oli.projectsai.data.search.PageFetcher
 import com.oli.projectsai.data.search.WebSearchClient
+import com.oli.projectsai.di.ApplicationScope
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -38,9 +38,9 @@ class GenerationController @Inject constructor(
     private val attachmentStore: AttachmentStore,
     private val webSearchClient: WebSearchClient,
     private val pageFetcher: PageFetcher,
-    private val searchSettings: SearchSettings
+    private val searchSettings: SearchSettings,
+    @ApplicationScope private val scope: CoroutineScope
 ) {
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
     private val _activeGeneration = MutableStateFlow<ActiveGeneration?>(null)
     val activeGeneration: StateFlow<ActiveGeneration?> = _activeGeneration.asStateFlow()
@@ -132,10 +132,11 @@ class GenerationController @Inject constructor(
                 if (toolInstructions.isNotBlank()) add(toolInstructions)
             }.joinToString("\n\n")
 
+            val genConfig = GenerationConfig(applyDefaultPreamble = params.applyDefaultPreamble)
             cancelled = when (depth.takeIf { params.webSearchEnabled }) {
-                SearchDepth.TOOL_LOOP -> runToolLoop(chatMessages, effectiveSystemPrompt, fullResponse, params.backendId)
-                SearchDepth.AUTO_FETCH -> runAutoFetch(chatMessages, effectiveSystemPrompt, fullResponse, params.backendId)
-                null -> runSingleTurn(chatMessages, effectiveSystemPrompt, fullResponse, params.backendId)
+                SearchDepth.TOOL_LOOP -> runToolLoop(chatMessages, effectiveSystemPrompt, fullResponse, params.backendId, genConfig)
+                SearchDepth.AUTO_FETCH -> runAutoFetch(chatMessages, effectiveSystemPrompt, fullResponse, params.backendId, genConfig)
+                null -> runSingleTurn(chatMessages, effectiveSystemPrompt, fullResponse, params.backendId, genConfig)
             }
         } catch (ie: InferenceError) {
             lastFailed[chatId] = LastFailed(params.currentUserContent, params.currentAttachments)
@@ -181,34 +182,55 @@ class GenerationController @Inject constructor(
         chatMessages: List<ChatMessage>,
         systemPromptText: String,
         fullResponse: StringBuilder,
-        backendId: String? = null
+        backendId: String? = null,
+        config: GenerationConfig = GenerationConfig()
     ): Boolean {
+        var firstTokenReceived = false
+        var showingSlowWarning = false
+        val slowJob = scope.launch {
+            delay(SLOW_RESPONSE_THRESHOLD_MS)
+            showingSlowWarning = true
+            updateSearchStatus("Still generating — the model is taking a while to respond…")
+        }
         return try {
             inferenceManager.generate(
                 systemPrompt = systemPromptText,
                 messages = chatMessages,
-                config = GenerationConfig(),
+                config = config,
                 backendId = backendId
             ).collect { token ->
+                if (!firstTokenReceived) {
+                    firstTokenReceived = true
+                    slowJob.cancel()
+                }
+                if (showingSlowWarning) {
+                    showingSlowWarning = false
+                    updateSearchStatus(null)
+                }
                 fullResponse.append(token)
                 updateStreaming(fullResponse.toString())
             }
             false
         } catch (ce: CancellationException) { true }
+        finally {
+            slowJob.cancel()
+            if (showingSlowWarning) updateSearchStatus(null)
+        }
     }
 
     private suspend fun runAutoFetch(
         chatMessages: List<ChatMessage>,
         systemPromptText: String,
         fullResponse: StringBuilder,
-        backendId: String? = null
+        backendId: String? = null,
+        config: GenerationConfig = GenerationConfig()
     ): Boolean {
         val firstBuf = StringBuilder()
         var cancelled = try {
             inferenceManager.generate(
                 systemPrompt = systemPromptText,
                 messages = chatMessages,
-                config = GenerationConfig(),
+                config = config,
                 backendId = backendId
             ).collect { token ->
                 firstBuf.append(token)
@@ -259,7 +281,8 @@ class GenerationController @Inject constructor(
             inferenceManager.generate(
                 systemPrompt = systemPromptText,
                 messages = continuation,
-                config = GenerationConfig(),
+                // Preamble already applied to the first turn; skip it on the follow-up.
+                config = config.copy(applyDefaultPreamble = false),
                 backendId = backendId
             ).collect { token ->
                 fullResponse.append(token)
@@ -274,16 +297,19 @@ class GenerationController @Inject constructor(
         chatMessages: List<ChatMessage>,
         systemPromptText: String,
         fullResponse: StringBuilder,
-        backendId: String? = null
+        backendId: String? = null,
+        config: GenerationConfig = GenerationConfig()
     ): Boolean {
         var conversation = chatMessages
         repeat(TOOL_LOOP_MAX_ROUNDS) { round ->
             val buf = StringBuilder()
+            // Only apply the preamble on the first round; subsequent rounds are continuations.
+            val roundConfig = if (round == 0) config else config.copy(applyDefaultPreamble = false)
             val cancelled = try {
                 inferenceManager.generate(
                     systemPrompt = systemPromptText,
                     messages = conversation,
-                    config = GenerationConfig(),
+                    config = roundConfig,
                     backendId = backendId
                 ).collect { token ->
                     buf.append(token)
@@ -362,6 +388,7 @@ private fun currentTemporalContext(): String {
 private val SEARCH_TAG_REGEX = Regex("<search>(.*?)</search>", RegexOption.DOT_MATCHES_ALL)
 private val FETCH_TAG_REGEX = Regex("<fetch>(.*?)</fetch>", RegexOption.DOT_MATCHES_ALL)
 private const val TOOL_LOOP_MAX_ROUNDS = 4
+private const val SLOW_RESPONSE_THRESHOLD_MS = 30_000L
 
 private fun stripToolTags(text: String): String {
     val sIdx = text.indexOf("<search>")

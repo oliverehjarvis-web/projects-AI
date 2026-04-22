@@ -7,5 +7,6 @@ data class GenerationParams(
     val systemPrompt: String,
     val webSearchEnabled: Boolean,
     val chatTitleHint: String,
-    val backendId: String? = null
+    val backendId: String? = null,
+    val applyDefaultPreamble: Boolean = true
 )

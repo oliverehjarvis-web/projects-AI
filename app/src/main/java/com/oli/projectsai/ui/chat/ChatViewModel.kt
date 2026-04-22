@@ -331,7 +331,10 @@ class ChatViewModel @Inject constructor(
             systemPrompt = systemPrompt,
             webSearchEnabled = _webSearchEnabled.value,
             chatTitleHint = titleHint,
-            backendId = preferredBackendId
+            backendId = preferredBackendId,
+            // Quick Actions are short, direct operations that don't benefit from the server's
+            // reasoning preamble — suppress it so responses stay concise.
+            applyDefaultPreamble = quickActionId == -1L
         )
         val started = generationController.start(params)
         if (started) {

@@ -41,6 +41,9 @@ class InferenceConfig(BaseModel):
     max_tokens: int = 2048
     temperature: float = 0.7
     top_p: float = 0.95
+    # When False the _REASONING_PREAMBLE is omitted from the system prompt. Set to
+    # False for Quick Actions and other short-form requests that need direct responses.
+    apply_default_preamble: bool = True
 
 
 class InferenceRequest(BaseModel):
@@ -128,7 +131,10 @@ async def _stream_ollama(req: InferenceRequest) -> AsyncIterator[str]:
         global_rules = req.global_rules or ""
 
     system_prompt = req.system_prompt.strip()
-    sections = [_REASONING_PREAMBLE, _temporal_block()]
+    sections = []
+    if req.config.apply_default_preamble:
+        sections.append(_REASONING_PREAMBLE)
+    sections.append(_temporal_block())
     global_block = _build_global_block(user_name, global_rules)
     if global_block:
         sections.append(global_block)
@@ -272,6 +278,10 @@ async def _stream_ollama(req: InferenceRequest) -> AsyncIterator[str]:
                 if in_thinking_block:
                     yield f"data: {json.dumps({'token': '</think>\n\n'})}\n\n"
                     in_thinking_block = False
+                completion_tokens = chunk.get("eval_count", 0)
+                prompt_tokens = chunk.get("prompt_eval_count", 0)
+                if completion_tokens or prompt_tokens:
+                    yield f"data: {json.dumps({'usage': {'completion_tokens': completion_tokens, 'prompt_tokens': prompt_tokens}})}\n\n"
                 yield "data: [DONE]\n\n"
                 return
     finally:

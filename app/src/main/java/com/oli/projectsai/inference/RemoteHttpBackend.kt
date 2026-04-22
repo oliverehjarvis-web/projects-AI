@@ -1,11 +1,11 @@
 package com.oli.projectsai.inference
 
 import com.oli.projectsai.data.preferences.RemoteSettings
+import com.oli.projectsai.di.ApplicationScope
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.InternalCoroutinesApi
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
@@ -26,7 +26,8 @@ import javax.inject.Singleton
 
 @Singleton
 class RemoteHttpBackend @Inject constructor(
-    private val remoteSettings: RemoteSettings
+    private val remoteSettings: RemoteSettings,
+    @ApplicationScope private val scope: CoroutineScope
 ) : InferenceBackend {
 
     companion object {
@@ -37,12 +38,11 @@ class RemoteHttpBackend @Inject constructor(
         private const val STREAM_IDLE_TIMEOUT_MS = 600_000
     }
 
-    // Singleton — scope lives for the process lifetime.
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
-
     // Cached for the synchronous `isAvailable` property; the suspend paths read freshly.
     @Volatile private var serverUrlSnapshot: String = ""
     @Volatile private var _isLoaded: Boolean = false
+    // Set when the server reports token usage in the DONE event; consumed by countTokens().
+    @Volatile private var _lastCompletionTokens: Int? = null
 
     init {
         remoteSettings.serverUrl.onEach { serverUrlSnapshot = it }.launchIn(scope)
@@ -53,6 +53,8 @@ class RemoteHttpBackend @Inject constructor(
     override val isAvailable: Boolean get() = serverUrlSnapshot.isNotBlank()
     override val isLoaded: Boolean get() = _isLoaded
     override val loadedModel: ModelInfo? = null
+    override val supportsTranscription: Boolean = false
+    override val supportsVision: Boolean = true
 
     override suspend fun loadModel(modelInfo: ModelInfo) {
         val url = remoteSettings.serverUrl.first().ifBlank {
@@ -134,6 +136,7 @@ class RemoteHttpBackend @Inject constructor(
                 put("max_tokens", config.maxOutputTokens)
                 put("temperature", config.temperature.toDouble())
                 put("top_p", config.topP.toDouble())
+                put("apply_default_preamble", config.applyDefaultPreamble)
             })
         }.toString()
 
@@ -176,6 +179,11 @@ class RemoteHttpBackend @Inject constructor(
                                     IllegalStateException(obj.getString("error"))
                                 )
                             }
+                            if (obj.has("usage")) {
+                                val usage = obj.getJSONObject("usage")
+                                val ct = usage.optInt("completion_tokens", 0)
+                                if (ct > 0) _lastCompletionTokens = ct
+                            }
                             val chunk = obj.optString("token", "")
                             if (chunk.isNotEmpty()) emit(chunk)
                         } catch (ie: InferenceError) {
@@ -203,9 +211,14 @@ class RemoteHttpBackend @Inject constructor(
         throw InferenceError.TranscriptionFailed(UnsupportedOperationException("Transcription is not supported on the remote backend"))
     }
 
-    override suspend fun countTokens(text: String): Int =
-        if (text.isEmpty()) 0
+    override suspend fun countTokens(text: String): Int {
+        _lastCompletionTokens?.let { stored ->
+            _lastCompletionTokens = null
+            return stored
+        }
+        return if (text.isEmpty()) 0
         else (text.length / CHARS_PER_TOKEN).toInt().coerceAtLeast(1)
+    }
 
     private fun readErrorDetail(conn: HttpURLConnection): String =
         runCatching { conn.errorStream?.bufferedReader()?.use { it.readText() } }

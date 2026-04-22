@@ -32,6 +32,8 @@ class LocalMediaPipeBackend @Inject constructor(
     override val id: String = "local_mediapipe"
     override val displayName: String = "Local (LiteRT)"
     override val isAvailable: Boolean = true
+    override val supportsTranscription: Boolean = true
+    override val supportsVision: Boolean = true
 
     private var engine: Engine? = null
     private var _loadedModel: ModelInfo? = null

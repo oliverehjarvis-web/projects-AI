@@ -20,7 +20,10 @@ data class GenerationConfig(
     val temperature: Float = 0.7f,
     val topK: Int = 40,
     val topP: Float = 0.95f,
-    val randomSeed: Int = 0
+    val randomSeed: Int = 0,
+    // When false the server skips prepending _REASONING_PREAMBLE. Useful for Quick
+    // Actions that need short, direct responses and don't benefit from reasoning guidance.
+    val applyDefaultPreamble: Boolean = true
 )
 
 enum class ModelPrecision(@StringRes val displayNameRes: Int, val estimatedRamGb: Float) {
@@ -61,6 +64,8 @@ interface InferenceBackend {
     val isAvailable: Boolean
     val isLoaded: Boolean
     val loadedModel: ModelInfo?
+    val supportsTranscription: Boolean
+    val supportsVision: Boolean
 
     suspend fun loadModel(modelInfo: ModelInfo)
     suspend fun unloadModel()
