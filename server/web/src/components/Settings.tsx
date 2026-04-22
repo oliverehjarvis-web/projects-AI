@@ -3,6 +3,7 @@ import { getBaseUrl, setBaseUrl, getToken, setToken } from "../api/client";
 import { useStore } from "../store/useStore";
 import { checkHealth } from "../api/sync";
 import { fetchModels, pullModel, deleteModel, type CatalogueModel } from "../api/models";
+import { fetchGlobalContext, saveGlobalContext } from "../api/global";
 
 const s: Record<string, React.CSSProperties> = {
   page: { padding: 24, maxWidth: 560, overflowY: "auto", flex: 1 },
@@ -54,13 +55,42 @@ const s: Record<string, React.CSSProperties> = {
 interface PullState { status: string; pct: number | null; error?: string }
 
 export default function Settings() {
-  const { model, setModel } = useStore();
+  const { model, setModel, globalContext, setGlobalContext } = useStore();
   const [url, setUrl] = useState(getBaseUrl());
   const [token, setTokenState] = useState(getToken());
   const [connStatus, setConnStatus] = useState<{ ok: boolean; msg: string } | null>(null);
   const [catalogue, setCatalogue] = useState<CatalogueModel[]>([]);
   const [pulling, setPulling] = useState<Record<string, PullState>>({});
   const [loadingModels, setLoadingModels] = useState(false);
+  const [gcDraft, setGcDraft] = useState({ user_name: globalContext.user_name, rules: globalContext.rules });
+  const [gcSaving, setGcSaving] = useState(false);
+  const [gcStatus, setGcStatus] = useState<string | null>(null);
+
+  useEffect(() => {
+    setGcDraft({ user_name: globalContext.user_name, rules: globalContext.rules });
+  }, [globalContext.user_name, globalContext.rules]);
+
+  useEffect(() => {
+    if (!getBaseUrl() || !getToken()) return;
+    fetchGlobalContext().then(setGlobalContext).catch(() => {});
+  }, [setGlobalContext]);
+
+  const saveGlobal = async () => {
+    setGcSaving(true);
+    setGcStatus(null);
+    try {
+      const saved = await saveGlobalContext(gcDraft);
+      setGlobalContext(saved);
+      setGcStatus("Saved");
+      setTimeout(() => setGcStatus(null), 2000);
+    } catch (e) {
+      setGcStatus(`Failed: ${e}`);
+    } finally {
+      setGcSaving(false);
+    }
+  };
+  const gcDirty =
+    gcDraft.user_name !== globalContext.user_name || gcDraft.rules !== globalContext.rules;
 
   const installedModels = catalogue.filter((m) => m.installed);
 
@@ -138,6 +168,42 @@ export default function Settings() {
         {connStatus && (
           <div style={{ ...s.status, ...(connStatus.ok ? {} : s.statusErr) }}>{connStatus.msg}</div>
         )}
+      </div>
+
+      {/* Global context */}
+      <div style={s.section}>
+        <div style={s.sectionTitle}>Global context</div>
+        <label style={s.label}>Your name</label>
+        <input
+          style={s.input}
+          value={gcDraft.user_name}
+          onChange={(e) => setGcDraft({ ...gcDraft, user_name: e.target.value })}
+          placeholder="e.g. Oli"
+        />
+        <label style={s.label}>Global guidelines</label>
+        <textarea
+          style={{
+            ...s.input,
+            minHeight: 120,
+            fontFamily: "inherit",
+            resize: "vertical",
+          }}
+          value={gcDraft.rules}
+          onChange={(e) => setGcDraft({ ...gcDraft, rules: e.target.value })}
+          placeholder={"Soft preferences the assistant applies across every project.\nExamples: British English, avoid em-dashes, be concise."}
+        />
+        <div style={{ fontSize: 12, color: "#666", marginTop: -8, marginBottom: 12 }}>
+          Treated as soft preferences — the assistant can deviate for specific requests and
+          will add one line explaining why when it does.
+        </div>
+        <button
+          style={{ ...s.btn, ...(!gcDirty || gcSaving ? { background: "#333", cursor: "not-allowed" } : {}) }}
+          onClick={saveGlobal}
+          disabled={!gcDirty || gcSaving}
+        >
+          {gcSaving ? "Saving…" : "Save"}
+        </button>
+        {gcStatus && <span style={{ marginLeft: 12, color: "#4caf50", fontSize: 13 }}>{gcStatus}</span>}
       </div>
 
       {/* Active model */}

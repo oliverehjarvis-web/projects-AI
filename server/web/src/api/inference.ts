@@ -1,18 +1,26 @@
 import { apiFetch } from "./client";
 import type { Message } from "./sync";
 
+export interface GenerateOptions {
+  systemPrompt: string;
+  messages: Message[];
+  model: string;
+  userName?: string;
+  globalRules?: string;
+}
+
 export async function streamGenerate(
-  systemPrompt: string,
-  messages: Message[],
-  model: string,
+  opts: GenerateOptions,
   onToken: (token: string) => void,
   onDone: () => void,
-  signal?: AbortSignal
+  signal?: AbortSignal,
 ): Promise<void> {
   const body = {
-    system_prompt: systemPrompt,
-    messages: messages.map((m) => ({ role: m.role, content: m.content })),
-    config: { model },
+    system_prompt: opts.systemPrompt,
+    messages: opts.messages.map((m) => ({ role: m.role, content: m.content })),
+    config: { model: opts.model },
+    user_name: opts.userName ?? "",
+    global_rules: opts.globalRules ?? "",
   };
 
   const response = await apiFetch("/v1/generate", {
@@ -47,7 +55,6 @@ export async function streamGenerate(
         if (obj.token) onToken(obj.token);
       } catch (e) {
         if (e instanceof Error && e.message) throw e;
-        // ignore malformed lines
       }
     }
   }

@@ -24,7 +24,7 @@ const s: Record<string, React.CSSProperties> = {
 
 export default function ChatView() {
   const { projectId, chatId } = useParams<{ projectId: string; chatId: string }>();
-  const { projects, chats, messages, setMessages, addMessage, appendToken, model } = useStore();
+  const { projects, chats, messages, setMessages, addMessage, appendToken, reconcileMessageId, model, globalContext } = useStore();
   const project = projects.find((p) => p.remote_id === projectId);
   const chat = chats[projectId ?? ""]?.find((c) => c.remote_id === chatId);
   const msgList = chatId ? (messages[chatId] ?? []) : [];
@@ -70,8 +70,16 @@ export default function ChatView() {
       deleted_at: null,
     };
     addMessage(chatId, userMsg);
+    // Push immediately so the server persists the user's turn. Reconcile the
+    // tmp id back so the next /v1/sync/full doesn't see the real server entry
+    // as a new item and duplicate it alongside the optimistic one.
+    const tmpUserId = userMsg.remote_id;
     const { remote_id: _rid, ...userMsgWithoutId } = userMsg;
-    pushMessage(userMsgWithoutId).catch(console.error);
+    pushMessage(userMsgWithoutId)
+      .then((realId) => {
+        reconcileMessageId(chatId, tmpUserId, { ...userMsg, remote_id: realId });
+      })
+      .catch(console.error);
 
     const streamingId = `tmp-assistant-${now}`;
     const assistantMsg: Message = {
@@ -92,9 +100,13 @@ export default function ChatView() {
 
     try {
       await streamGenerate(
-        systemPrompt,
-        [...msgList, userMsg],
-        model,
+        {
+          systemPrompt,
+          messages: [...msgList, userMsg],
+          model,
+          userName: globalContext.user_name,
+          globalRules: globalContext.rules,
+        },
         (token) => {
           if (thinkingSince !== null) setThinkingSince(null);
           appendToken(chatId, streamingId, token);
@@ -102,13 +114,23 @@ export default function ChatView() {
         () => { setStreaming(false); setThinkingSince(null); },
         abortRef.current.signal
       );
+      // Persist the assistant's reply. Until this call, the reply only lives
+      // in memory — without it, the web UI quietly dropped every response on
+      // refresh and never synced them to the phone.
+      const streamed = useStore.getState().messages[chatId]?.find((m) => m.remote_id === streamingId);
+      if (streamed && streamed.content.trim()) {
+        const { remote_id: _aid, ...asstWithoutId } = streamed;
+        pushMessage(asstWithoutId)
+          .then((realId) => reconcileMessageId(chatId, streamingId, { ...streamed, remote_id: realId }))
+          .catch(console.error);
+      }
     } catch (e) {
       setStreaming(false);
       setThinkingSince(null);
       const msg = e instanceof Error ? e.message : String(e);
       if (!/abort/i.test(msg)) setStreamError(msg);
     }
-  }, [input, chatId, projectId, streaming, msgList, project, model, addMessage, appendToken, thinkingSince]);
+  }, [input, chatId, projectId, streaming, msgList, project, model, globalContext, addMessage, appendToken, reconcileMessageId, thinkingSince]);
 
   const onKey = (e: React.KeyboardEvent) => {
     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }

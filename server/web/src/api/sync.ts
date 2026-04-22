@@ -146,3 +146,19 @@ export async function checkHealth(): Promise<{ status: string; ollama: string }>
   const r = await apiFetch("/v1/health");
   return r.json();
 }
+
+export interface SyncFullResult {
+  projects: Project[];
+  chats: Chat[];
+  messages: Message[];
+}
+
+export async function syncFull(since: number): Promise<SyncFullResult> {
+  const r = await apiFetch(`/v1/sync/full?since=${since}`);
+  const data = await r.json();
+  return {
+    projects: data.projects ?? [],
+    chats: data.chats ?? [],
+    messages: data.messages ?? [],
+  };
+}

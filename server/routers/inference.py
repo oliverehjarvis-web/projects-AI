@@ -1,4 +1,5 @@
 import asyncio
+import datetime
 import json
 import sys
 import time
@@ -9,6 +10,7 @@ import httpx
 from pydantic import BaseModel
 from auth import require_auth
 from config import OLLAMA_URL, DEFAULT_MODEL
+from db import get_db
 
 
 def _log(fmt: str, *args: object) -> None:
@@ -45,27 +47,94 @@ class InferenceRequest(BaseModel):
     system_prompt: str = ""
     messages: list[InferenceMessage]
     config: InferenceConfig = InferenceConfig()
+    # Optional explicit global context overrides. If omitted, the server looks
+    # them up from the global_context table so all clients share the same values.
+    user_name: str | None = None
+    global_rules: str | None = None
 
 
-# Prefix prepended to every system prompt so thinking-capable models don't
-# re-evaluate persistent project context for trivial prompts. Keep this short —
-# long system prompts themselves provoke longer reasoning on some models.
+# Prefix prepended to every system prompt. Two jobs:
+#   1. Scale reasoning depth to the request — a greeting should not trigger
+#      paragraphs of deliberation.
+#   2. Soft-frame the project/global guidelines so the model doesn't fall into a
+#      rule-checking loop where it re-evaluates each constraint against each
+#      draft. Explicitly license it to deviate (with a short note) rather than
+#      keep ruminating.
+#   3. Give it an explicit stop-condition for thinking: if it revisits the same
+#      concern twice, commit and state the remaining uncertainty.
 _REASONING_PREAMBLE = (
     "Match the depth of your reasoning to the complexity of the user's request. "
     "For simple greetings, one-word answers, or short factual replies, respond "
-    "directly with little or no internal deliberation. "
-    "Treat the project instructions and memory below as persistent background "
-    "preferences — apply them naturally, do not re-analyse them on every turn."
+    "directly with little or no internal deliberation.\n\n"
+    "The project and user guidelines below are soft preferences, not hard rules. "
+    "Apply them naturally as background context. If a specific request is better "
+    "served by deviating from a guideline, deviate — but add one short line at the "
+    "end of your answer explaining what you broke and why (e.g. \"Note: used "
+    "American spelling here because the user quoted American sources\"). Do not "
+    "re-analyse these guidelines on every turn; treat them like a colleague's "
+    "standing preferences rather than a checklist.\n\n"
+    "Thinking stop-condition: if you notice yourself revisiting the same concern "
+    "a second time, stop deliberating. Commit to your best current answer and, if "
+    "anything is still uncertain, surface that uncertainty in one line of the "
+    "final reply. Never loop over the same three points — decide and move on."
 )
+
+
+def _temporal_block() -> str:
+    now = datetime.datetime.now().astimezone()
+    date = now.strftime("%A, %-d %B %Y")
+    time_str = now.strftime("%H:%M")
+    return f"Current context:\n- Date: {date}\n- Time: {time_str}\n- Timezone: {now.tzname()}"
+
+
+async def _load_global_context() -> tuple[str, str]:
+    db = await get_db()
+    try:
+        async with db.execute(
+            "SELECT user_name, rules FROM global_context WHERE id = 1"
+        ) as cur:
+            row = await cur.fetchone()
+    finally:
+        await db.close()
+    if row is None:
+        return "", ""
+    return (row["user_name"] or ""), (row["rules"] or "")
+
+
+def _build_global_block(user_name: str, rules: str) -> str:
+    parts: list[str] = []
+    if user_name.strip():
+        parts.append(f"You are speaking with {user_name.strip()}.")
+    if rules.strip():
+        # Framed as guidelines, not commands — paired with the preamble's
+        # deviation-is-OK clause this avoids the rule-checking loop.
+        parts.append(
+            "The user has these standing guidelines (soft preferences — follow by default, "
+            "deviate with a brief note when a specific request needs it):\n"
+            f"{rules.strip()}"
+        )
+    return "\n\n".join(parts)
 
 
 async def _stream_ollama(req: InferenceRequest) -> AsyncIterator[str]:
     ollama_messages = []
+    # Pull global context either from the request (explicit override) or the
+    # server-side singleton. None vs "" matters: None means "use server default",
+    # "" means "explicitly empty — don't look up".
+    if req.user_name is None and req.global_rules is None:
+        user_name, global_rules = await _load_global_context()
+    else:
+        user_name = req.user_name or ""
+        global_rules = req.global_rules or ""
+
     system_prompt = req.system_prompt.strip()
-    combined_system = (
-        f"{_REASONING_PREAMBLE}\n\n---\n{system_prompt}"
-        if system_prompt else _REASONING_PREAMBLE
-    )
+    sections = [_REASONING_PREAMBLE, _temporal_block()]
+    global_block = _build_global_block(user_name, global_rules)
+    if global_block:
+        sections.append(global_block)
+    if system_prompt:
+        sections.append(system_prompt)
+    combined_system = "\n\n---\n\n".join(sections)
     ollama_messages.append({"role": "system", "content": combined_system})
     for m in req.messages:
         role = "assistant" if m.role == "model" else m.role

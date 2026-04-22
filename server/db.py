@@ -50,6 +50,19 @@ CREATE TABLE IF NOT EXISTS quick_actions (
     updated_at          INTEGER NOT NULL,
     deleted_at          INTEGER
 );
+
+-- Singleton row (id=1) holding cross-project user preferences. Exposed via
+-- /v1/global_context so both the web UI and Android can share one source of
+-- truth for the user's name and the soft rules injected into every system
+-- prompt.
+CREATE TABLE IF NOT EXISTS global_context (
+    id          INTEGER PRIMARY KEY CHECK (id = 1),
+    user_name   TEXT NOT NULL DEFAULT '',
+    rules       TEXT NOT NULL DEFAULT '',
+    updated_at  INTEGER NOT NULL DEFAULT 0
+);
+INSERT OR IGNORE INTO global_context (id, user_name, rules, updated_at)
+VALUES (1, '', '', 0);
 """
 
 

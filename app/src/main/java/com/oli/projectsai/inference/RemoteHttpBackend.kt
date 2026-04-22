@@ -109,6 +109,11 @@ class RemoteHttpBackend @Inject constructor(
 
         val body = JSONObject().apply {
             put("system_prompt", systemPrompt)
+            // Tell the server the client has already folded global context into
+            // `system_prompt`, so it should skip the auto-lookup that would
+            // otherwise double-emit the user's name and rules.
+            put("user_name", "")
+            put("global_rules", "")
             put("messages", JSONArray().apply {
                 messages.forEach { m ->
                     put(JSONObject().apply {

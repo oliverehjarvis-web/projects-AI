@@ -231,10 +231,17 @@ class ChatViewModel @Inject constructor(
     }
 
     private fun buildGlobalBlock(name: String, rules: String): String {
+        // Framed as soft preferences, not hard rules. Phrasing matches the
+        // server-side preamble so thinking-capable models don't fall into a
+        // rule-checking loop where they re-evaluate each constraint against
+        // each draft reply — a 15-minute-thinking failure mode we hit before.
         val parts = mutableListOf<String>()
         if (name.isNotBlank()) parts.add("You are speaking with ${name.trim()}.")
         if (rules.isNotBlank()) {
-            parts.add("Follow these rules in every response:\n${rules.trim()}")
+            parts.add(
+                "The user has these standing guidelines (soft preferences — follow by default, " +
+                    "deviate with a brief note when a specific request needs it):\n${rules.trim()}"
+            )
         }
         return parts.joinToString("\n\n")
     }

@@ -86,6 +86,36 @@ async def _fetch_rows(db: aiosqlite.Connection, table: str, since: int, **filter
     return [dict(r) for r in rows]
 
 
+async def _cascade_delete_chats(db: aiosqlite.Connection, project_remote_id: str, deleted_at: int) -> None:
+    # Tombstones don't cascade through the FK (that only fires on physical
+    # DELETE), so we propagate deleted_at manually. Any chat under the project
+    # that isn't already tombstoned earlier than this call gets marked.
+    await db.execute(
+        """UPDATE chats
+              SET deleted_at = ?, updated_at = ?
+            WHERE project_remote_id = ?
+              AND (deleted_at IS NULL OR deleted_at > ?)""",
+        (deleted_at, deleted_at, project_remote_id, deleted_at),
+    )
+    async with db.execute(
+        "SELECT remote_id FROM chats WHERE project_remote_id = ?",
+        (project_remote_id,),
+    ) as cur:
+        chat_ids = [row[0] for row in await cur.fetchall()]
+    for cid in chat_ids:
+        await _cascade_delete_messages(db, cid, deleted_at)
+
+
+async def _cascade_delete_messages(db: aiosqlite.Connection, chat_remote_id: str, deleted_at: int) -> None:
+    await db.execute(
+        """UPDATE messages
+              SET deleted_at = ?, updated_at = ?
+            WHERE chat_remote_id = ?
+              AND (deleted_at IS NULL OR deleted_at > ?)""",
+        (deleted_at, deleted_at, chat_remote_id, deleted_at),
+    )
+
+
 async def _upsert_project(db: aiosqlite.Connection, item: ProjectItem) -> str:
     rid = item.remote_id or str(uuid.uuid4())
     await db.execute(
@@ -104,6 +134,8 @@ async def _upsert_project(db: aiosqlite.Connection, item: ProjectItem) -> str:
          item.pinned_memories, item.preferred_backend, item.memory_token_limit,
          item.context_length, int(item.is_secret), item.created_at, item.updated_at, item.deleted_at),
     )
+    if item.deleted_at is not None:
+        await _cascade_delete_chats(db, rid, item.deleted_at)
     return rid
 
 
@@ -120,6 +152,8 @@ async def _upsert_chat(db: aiosqlite.Connection, item: ChatItem) -> str:
         (rid, item.project_remote_id, item.title, int(item.web_search_enabled),
          item.created_at, item.updated_at, item.deleted_at),
     )
+    if item.deleted_at is not None:
+        await _cascade_delete_messages(db, rid, item.deleted_at)
     return rid
 
 
@@ -267,3 +301,49 @@ async def put_quick_actions(body: PushBody, _: None = Depends(require_auth)):
     finally:
         await db.close()
     return {"accepted": len(assigned), "remote_ids": assigned}
+
+
+# ── Global context ────────────────────────────────────────────────────────────
+
+class GlobalContext(BaseModel):
+    user_name: str = ""
+    rules: str = ""
+    updated_at: int = 0
+
+
+@router.get("/v1/global_context")
+async def get_global_context(_: None = Depends(require_auth)) -> GlobalContext:
+    db = await get_db()
+    try:
+        async with db.execute(
+            "SELECT user_name, rules, updated_at FROM global_context WHERE id = 1"
+        ) as cur:
+            row = await cur.fetchone()
+    finally:
+        await db.close()
+    if row is None:
+        return GlobalContext()
+    return GlobalContext(user_name=row["user_name"], rules=row["rules"], updated_at=row["updated_at"])
+
+
+@router.put("/v1/global_context")
+async def put_global_context(body: GlobalContext, _: None = Depends(require_auth)) -> GlobalContext:
+    now = int(time.time() * 1000)
+    db = await get_db()
+    try:
+        # Last-write-wins on `updated_at`: an older write (stale tab) loses to a
+        # newer one. Matches how the rest of the sync tables resolve conflicts.
+        await db.execute(
+            """UPDATE global_context
+                  SET user_name = ?, rules = ?, updated_at = ?
+                WHERE id = 1 AND ? >= updated_at""",
+            (body.user_name, body.rules, now, now),
+        )
+        await db.commit()
+        async with db.execute(
+            "SELECT user_name, rules, updated_at FROM global_context WHERE id = 1"
+        ) as cur:
+            row = await cur.fetchone()
+    finally:
+        await db.close()
+    return GlobalContext(user_name=row["user_name"], rules=row["rules"], updated_at=row["updated_at"])
