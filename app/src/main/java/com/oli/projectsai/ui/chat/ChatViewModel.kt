@@ -3,6 +3,10 @@ package com.oli.projectsai.ui.chat
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import android.os.Bundle
+import android.speech.RecognitionListener
+import android.speech.RecognizerIntent
+import android.speech.SpeechRecognizer
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
@@ -12,10 +16,8 @@ import com.oli.projectsai.data.db.entity.Chat
 import com.oli.projectsai.data.db.entity.Message
 import com.oli.projectsai.data.db.entity.MessageRole
 import com.oli.projectsai.data.preferences.GlobalContextStore
-import com.oli.projectsai.data.preferences.VoiceSettings
 import com.oli.projectsai.data.repository.ChatRepository
 import com.oli.projectsai.data.repository.ProjectRepository
-import com.oli.projectsai.inference.AudioCapture
 import com.oli.projectsai.inference.ChatError
 import com.oli.projectsai.inference.ChatMessage
 import com.oli.projectsai.inference.GenerationConfig
@@ -24,20 +26,14 @@ import com.oli.projectsai.inference.GenerationForegroundService
 import com.oli.projectsai.inference.GenerationParams
 import com.oli.projectsai.inference.InferenceError
 import com.oli.projectsai.inference.InferenceManager
-import com.oli.projectsai.inference.ModelInfo
-import com.oli.projectsai.inference.ModelPrecision
 import com.oli.projectsai.inference.ModelState
 import com.oli.projectsai.inference.SummarisationPrompts
-import com.oli.projectsai.inference.TRANSCRIPTION_MAX_SECONDS
-import java.io.File
 import com.oli.projectsai.ui.common.copyToClipboard
 import com.oli.projectsai.ui.common.shareText
 import com.oli.projectsai.ui.components.TokenBreakdown
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -56,9 +52,7 @@ class ChatViewModel @Inject constructor(
     private val inferenceManager: InferenceManager,
     private val globalContextStore: GlobalContextStore,
     private val attachmentStore: AttachmentStore,
-    private val audioCapture: AudioCapture,
     private val generationController: GenerationController,
-    private val voiceSettings: VoiceSettings,
     @ApplicationContext private val appContext: Context
 ) : ViewModel() {
 
@@ -110,8 +104,8 @@ class ChatViewModel @Inject constructor(
 
     sealed class DictationState {
         data object Idle : DictationState()
-        data object PreparingModel : DictationState()
-        data class Recording(val elapsedMs: Long) : DictationState()
+        /** Microphone open, audio streaming. [partialText] updates in real time as words are recognised. */
+        data class Recording(val partialText: String = "") : DictationState()
         data object Transcribing : DictationState()
         data class Error(val message: String) : DictationState()
     }
@@ -122,7 +116,11 @@ class ChatViewModel @Inject constructor(
     private val _transcribedText = MutableStateFlow<String?>(null)
     val transcribedText: StateFlow<String?> = _transcribedText.asStateFlow()
 
-    private var dictationJob: Job? = null
+    /** Normalised mic level 0..1, updated ~10 Hz while recording. Drives the waveform bars. */
+    private val _dictationRms = MutableStateFlow(0f)
+    val dictationRms: StateFlow<Float> = _dictationRms.asStateFlow()
+
+    private var speechRecognizer: SpeechRecognizer? = null
 
     private val _chatTitle = MutableStateFlow("New Chat")
     val chatTitle: StateFlow<String> = _chatTitle.asStateFlow()
@@ -352,90 +350,91 @@ class ChatViewModel @Inject constructor(
     }
 
     fun startDictation() {
-        if (dictationJob?.isActive == true) return
-        _transcribedText.value = null
-        dictationJob = viewModelScope.launch {
-            // Transcription always uses the local backend regardless of which backend is
-            // active for chat. Load the voice model on demand if it isn't resident yet.
-            if (!inferenceManager.localBackendReady) {
-                val path = voiceSettings.voiceModelPath.first()
-                if (path.isBlank() || !File(path).exists()) {
-                    _dictationState.value = DictationState.Error(
-                        "No voice model set. Pick one in Settings → Voice transcription."
-                    )
-                    return@launch
-                }
-                _dictationState.value = DictationState.PreparingModel
-                try {
-                    inferenceManager.prepareLocalForTranscription(
-                        ModelInfo(
-                            name = File(path).nameWithoutExtension,
-                            precision = ModelPrecision.Q4,
-                            filePath = path
-                        )
-                    )
-                } catch (t: Throwable) {
-                    _dictationState.value = DictationState.Error(
-                        t.message ?: "Failed to load voice model"
-                    )
-                    return@launch
-                }
-            }
-            try {
-                audioCapture.start()
-            } catch (t: Throwable) {
-                _dictationState.value = DictationState.Error(t.message ?: "Microphone unavailable")
-                return@launch
-            }
-            val startedAt = System.currentTimeMillis()
-            val maxMs = TRANSCRIPTION_MAX_SECONDS * 1000L
-            _dictationState.value = DictationState.Recording(0L)
-            try {
-                while (audioCapture.isRecording) {
-                    val elapsed = System.currentTimeMillis() - startedAt
-                    _dictationState.value = DictationState.Recording(elapsed)
-                    if (elapsed >= maxMs) break
-                    delay(200L)
-                }
-            } catch (ce: CancellationException) {
-                audioCapture.cancel()
-                _dictationState.value = DictationState.Idle
-                throw ce
-            }
-            finishDictation()
+        if (_dictationState.value != DictationState.Idle) return
+        if (!SpeechRecognizer.isRecognitionAvailable(appContext)) {
+            _dictationState.value = DictationState.Error("Speech recognition is not available on this device.")
+            return
         }
+        _transcribedText.value = null
+
+        val recognizer = SpeechRecognizer.createSpeechRecognizer(appContext)
+        speechRecognizer = recognizer
+        recognizer.setRecognitionListener(object : RecognitionListener {
+            override fun onReadyForSpeech(params: Bundle?) {
+                _dictationState.value = DictationState.Recording()
+            }
+            override fun onBeginningOfSpeech() {}
+            override fun onRmsChanged(rmsdB: Float) {
+                // onRmsChanged range is roughly -2..10; normalise to 0..1
+                _dictationRms.value = ((rmsdB + 2f) / 12f).coerceIn(0f, 1f)
+            }
+            override fun onBufferReceived(buffer: ByteArray?) {}
+            override fun onEndOfSpeech() {
+                _dictationState.value = DictationState.Transcribing
+            }
+            override fun onPartialResults(partialResults: Bundle?) {
+                val partial = partialResults
+                    ?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
+                    ?.firstOrNull().orEmpty()
+                _dictationState.value = DictationState.Recording(partialText = partial)
+            }
+            override fun onResults(results: Bundle?) {
+                val text = results
+                    ?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
+                    ?.firstOrNull().orEmpty()
+                _dictationRms.value = 0f
+                if (text.isNotBlank()) {
+                    _transcribedText.value = text
+                    _dictationState.value = DictationState.Idle
+                } else {
+                    _dictationState.value = DictationState.Error("Nothing was heard — try again.")
+                }
+                destroySpeechRecognizer()
+            }
+            override fun onError(error: Int) {
+                _dictationRms.value = 0f
+                _dictationState.value = DictationState.Error(
+                    when (error) {
+                        SpeechRecognizer.ERROR_AUDIO -> "Microphone error"
+                        SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS -> "Microphone permission needed"
+                        SpeechRecognizer.ERROR_NO_MATCH -> "Could not understand — try speaking more clearly"
+                        SpeechRecognizer.ERROR_RECOGNIZER_BUSY -> "Recogniser busy — try again"
+                        SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> "No speech detected — try again"
+                        SpeechRecognizer.ERROR_NETWORK,
+                        SpeechRecognizer.ERROR_NETWORK_TIMEOUT,
+                        SpeechRecognizer.ERROR_SERVER ->
+                            "Network error — enable offline speech in system Settings → General management → Language"
+                        else -> "Recognition failed"
+                    }
+                )
+                destroySpeechRecognizer()
+            }
+            override fun onEvent(eventType: Int, params: Bundle?) {}
+        })
+
+        val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+            putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
+            putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true)
+            putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
+        }
+        recognizer.startListening(intent)
     }
 
+    /** Finishes the current utterance and waits for the final result. */
     fun stopDictation() {
-        val job = dictationJob ?: return
-        if (!job.isActive) return
-        viewModelScope.launch { finishDictation() }
+        speechRecognizer?.stopListening()
     }
 
     fun cancelDictation() {
-        audioCapture.cancel()
-        dictationJob?.cancel()
-        dictationJob = null
+        _dictationRms.value = 0f
+        destroySpeechRecognizer()
         _dictationState.value = DictationState.Idle
     }
 
-    private suspend fun finishDictation() {
-        if (_dictationState.value is DictationState.Transcribing) return
-        _dictationState.value = DictationState.Transcribing
-        val bytes = audioCapture.stop()
-        if (bytes.isEmpty()) {
-            _dictationState.value = DictationState.Idle
-            return
-        }
-        try {
-            val text = inferenceManager.transcribeViaLocal(bytes).trim()
-            _transcribedText.value = text
-            _dictationState.value = DictationState.Idle
-        } catch (t: Throwable) {
-            _dictationState.value = DictationState.Error(t.message ?: "Transcription failed")
-        } finally {
-            dictationJob = null
-        }
+    private fun destroySpeechRecognizer() {
+        speechRecognizer?.destroy()
+        speechRecognizer = null
     }
 
     fun consumeTranscribedText(): String? {
@@ -512,4 +511,9 @@ class ChatViewModel @Inject constructor(
     }
 
     fun dismissError() { generationController.clearError(activeChatId) }
+
+    override fun onCleared() {
+        destroySpeechRecognizer()
+        super.onCleared()
+    }
 }
