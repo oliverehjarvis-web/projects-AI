@@ -132,7 +132,10 @@ class GenerationController @Inject constructor(
                 if (toolInstructions.isNotBlank()) add(toolInstructions)
             }.joinToString("\n\n")
 
-            val genConfig = GenerationConfig(applyDefaultPreamble = params.applyDefaultPreamble)
+            val genConfig = GenerationConfig(
+                maxOutputTokens = params.maxOutputTokens,
+                applyDefaultPreamble = params.applyDefaultPreamble
+            )
             cancelled = when (depth.takeIf { params.webSearchEnabled }) {
                 SearchDepth.TOOL_LOOP -> runToolLoop(chatMessages, effectiveSystemPrompt, fullResponse, params.backendId, genConfig)
                 SearchDepth.AUTO_FETCH -> runAutoFetch(chatMessages, effectiveSystemPrompt, fullResponse, params.backendId, genConfig)

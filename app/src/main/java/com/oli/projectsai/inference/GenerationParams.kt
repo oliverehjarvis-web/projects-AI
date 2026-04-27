@@ -8,5 +8,6 @@ data class GenerationParams(
     val webSearchEnabled: Boolean,
     val chatTitleHint: String,
     val backendId: String? = null,
-    val applyDefaultPreamble: Boolean = true
+    val applyDefaultPreamble: Boolean = true,
+    val maxOutputTokens: Int = 16000
 )

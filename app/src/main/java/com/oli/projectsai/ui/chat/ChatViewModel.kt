@@ -139,6 +139,7 @@ class ChatViewModel @Inject constructor(
                 if (contextProjectId != -1L) {
                     val p = projectRepository.getProject(contextProjectId)
                     if (p != null) {
+                        contextMemoryTokenLimit = p.memoryTokenLimit
                         systemPrompt = buildSystemPrompt(name, rules, p.manualContext, p.accumulatedMemory)
                         refreshContextTokenBreakdown(name, rules, p.manualContext, p.accumulatedMemory)
                     }
@@ -184,12 +185,14 @@ class ChatViewModel @Inject constructor(
 
     private var contextProjectId: Long = -1L
     @Volatile private var preferredBackendId: String? = null
+    @Volatile private var contextMemoryTokenLimit: Int = Int.MAX_VALUE
 
     private suspend fun loadProjectContext(pid: Long) {
         contextProjectId = pid
         val project = projectRepository.getProject(pid) ?: return
         preferredBackendId = if (project.preferredBackend == com.oli.projectsai.data.db.entity.PreferredBackend.REMOTE)
             "remote_http" else null
+        contextMemoryTokenLimit = project.memoryTokenLimit
         val name = globalContextStore.name.first()
         val rules = globalContextStore.rules.first()
         systemPrompt = buildSystemPrompt(name, rules, project.manualContext, project.accumulatedMemory)
@@ -205,6 +208,14 @@ class ChatViewModel @Inject constructor(
         }
     }
 
+    private fun trimMemoryToLimit(memory: String): String {
+        if (contextMemoryTokenLimit >= Int.MAX_VALUE || contextMemoryTokenLimit <= 0) return memory
+        val charBudget = contextMemoryTokenLimit * 4  // ~4 chars/token (Gemma SentencePiece calibrated)
+        return if (memory.length > charBudget) {
+            memory.take(charBudget) + "\n[memory truncated — compress in Memory settings]"
+        } else memory
+    }
+
     private fun buildSystemPrompt(
         name: String,
         rules: String,
@@ -214,7 +225,7 @@ class ChatViewModel @Inject constructor(
         val globalBlock = buildGlobalBlock(name, rules)
         if (globalBlock.isNotBlank()) add(globalBlock)
         if (manualContext.isNotBlank()) add("<project_context>\n$manualContext\n</project_context>")
-        if (memory.isNotBlank()) add("<memory>\n$memory\n</memory>")
+        if (memory.isNotBlank()) add("<memory>\n${trimMemoryToLimit(memory)}\n</memory>")
     }.joinToString("\n\n")
 
     private suspend fun refreshContextTokenBreakdown(
@@ -229,7 +240,7 @@ class ChatViewModel @Inject constructor(
         ).joinToString("\n\n")
         _tokenBreakdown.value = _tokenBreakdown.value.copy(
             systemPrompt = inferenceManager.countTokens(systemText),
-            memory = inferenceManager.countTokens(memory),
+            memory = inferenceManager.countTokens(trimMemoryToLimit(memory)),
             contextLimit = inferenceManager.contextLimitFlow.value
         )
     }
@@ -330,6 +341,14 @@ class ChatViewModel @Inject constructor(
         currentAttachments: List<String>,
         titleHint: String
     ) {
+        // Cap output to the remaining context budget. Subtract a small buffer for the current
+        // user message which may not yet be counted in the breakdown (flow hasn't fired yet).
+        // Falls back to 16000 when context size is unknown (no model loaded).
+        val adaptiveMaxTokens = run {
+            val bd = _tokenBreakdown.value
+            if (bd.contextLimit > 0 && bd.remaining > 0) (bd.remaining - 200).coerceIn(256, 16000)
+            else 16000
+        }
         val params = GenerationParams(
             chatId = activeChatId,
             currentUserContent = currentUserContent,
@@ -340,7 +359,8 @@ class ChatViewModel @Inject constructor(
             backendId = preferredBackendId,
             // Quick Actions are short, direct operations that don't benefit from the server's
             // reasoning preamble — suppress it so responses stay concise.
-            applyDefaultPreamble = quickActionId == -1L
+            applyDefaultPreamble = quickActionId == -1L,
+            maxOutputTokens = adaptiveMaxTokens
         )
         val started = generationController.start(params)
         if (started) {

@@ -27,6 +27,9 @@ class LocalMediaPipeBackend @Inject constructor(
         private const val TRANSCRIBE_PROMPT =
             "Transcribe the audio verbatim. Output only the transcript text, no commentary."
         private const val DEFAULT_CHARS_PER_TOKEN = 4.0f
+        // Older turns beyond this window are expected to be captured in accumulatedMemory.
+        // Prevents prior_conversation from eating the entire context on long chats.
+        private const val PRIOR_CONVERSATION_WINDOW = 20
     }
 
     override val id: String = "local_mediapipe"
@@ -84,7 +87,7 @@ class LocalMediaPipeBackend @Inject constructor(
     ): Flow<String> {
         val e = engine ?: throw InferenceError.ModelNotLoaded
 
-        val fullContext = buildFullContext(systemPrompt, messages.dropLast(1))
+        val fullContext = buildFullContext(systemPrompt, messages.dropLast(1).takeLast(PRIOR_CONVERSATION_WINDOW))
         val systemInstruction: Contents? = if (fullContext.isNotBlank()) Contents.of(fullContext) else null
         val conversationConfig = ConversationConfig(systemInstruction = systemInstruction)
 
