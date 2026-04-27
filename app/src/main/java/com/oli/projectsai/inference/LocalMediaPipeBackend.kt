@@ -131,7 +131,10 @@ class LocalMediaPipeBackend @Inject constructor(
                 val label = if (msg.role == "user") "User" else "Assistant"
                 "$label: ${msg.content}"
             }
-            parts.add("Prior conversation:\n$history")
+            // Wrapped in XML so the model treats this as reference history rather than
+            // active instructions to follow — bare text was causing imperatives typed by
+            // the user in prior turns to be re-applied as standing rules.
+            parts.add("<prior_conversation>\n$history\n</prior_conversation>")
         }
         return parts.joinToString("\n\n")
     }

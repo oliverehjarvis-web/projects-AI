@@ -12,6 +12,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import kotlinx.coroutines.delay
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -30,8 +31,20 @@ fun ProjectEditScreen(
     val isSecret by viewModel.isSecret.collectAsStateWithLifecycle()
     val canTogglePrivate by viewModel.canTogglePrivate.collectAsStateWithLifecycle()
     val useRemoteBackend by viewModel.useRemoteBackend.collectAsStateWithLifecycle()
+    val isRefining by viewModel.isRefining.collectAsStateWithLifecycle()
+    val refineError by viewModel.refineError.collectAsStateWithLifecycle()
+
+    val snackbarHostState = remember { SnackbarHostState() }
+
+    LaunchedEffect(refineError) {
+        if (refineError != null) {
+            snackbarHostState.showSnackbar(refineError!!)
+            viewModel.clearRefineError()
+        }
+    }
 
     Scaffold(
+        snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
             TopAppBar(
                 title = { Text(if (isNew) "New Project" else "Edit Project") },
@@ -101,6 +114,32 @@ fun ProjectEditScreen(
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
+
+            OutlinedButton(
+                onClick = { viewModel.refineContext() },
+                enabled = manualContext.isNotBlank() && !isRefining,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                if (isRefining) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(18.dp),
+                        strokeWidth = 2.dp,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Text("Refining...")
+                } else {
+                    Text("Refine with AI")
+                }
+            }
+
+            if (isRefining) {
+                Text(
+                    "The model is rewriting your context to avoid looping patterns. This may take a moment.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
 
             HorizontalDivider()
 

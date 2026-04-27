@@ -213,8 +213,8 @@ class ChatViewModel @Inject constructor(
     ): String = buildList {
         val globalBlock = buildGlobalBlock(name, rules)
         if (globalBlock.isNotBlank()) add(globalBlock)
-        if (manualContext.isNotBlank()) add(manualContext)
-        if (memory.isNotBlank()) add("## Accumulated Memory\n$memory")
+        if (manualContext.isNotBlank()) add("<project_context>\n$manualContext\n</project_context>")
+        if (memory.isNotBlank()) add("<memory>\n$memory\n</memory>")
     }.joinToString("\n\n")
 
     private suspend fun refreshContextTokenBreakdown(
@@ -235,10 +235,11 @@ class ChatViewModel @Inject constructor(
     }
 
     private fun buildGlobalBlock(name: String, rules: String): String {
-        // Framed as soft preferences, not hard rules. Phrasing matches the
-        // server-side preamble so thinking-capable models don't fall into a
-        // rule-checking loop where they re-evaluate each constraint against
-        // each draft reply — a 15-minute-thinking failure mode we hit before.
+        // Framed as soft preferences, not hard rules, and wrapped in <user_profile> so the model
+        // clearly distinguishes this section from project facts and memory. Phrasing matches the
+        // server-side preamble so thinking-capable models don't fall into a rule-checking loop
+        // where they re-evaluate each constraint against each draft reply — a 15-minute-thinking
+        // failure mode we hit before.
         val parts = mutableListOf<String>()
         if (name.isNotBlank()) parts.add("You are speaking with ${name.trim()}.")
         if (rules.isNotBlank()) {
@@ -247,7 +248,8 @@ class ChatViewModel @Inject constructor(
                     "deviate with a brief note when a specific request needs it):\n${rules.trim()}"
             )
         }
-        return parts.joinToString("\n\n")
+        if (parts.isEmpty()) return ""
+        return "<user_profile>\n${parts.joinToString("\n\n")}\n</user_profile>"
     }
 
     fun sendMessage(content: String) {

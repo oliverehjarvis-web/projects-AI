@@ -21,6 +21,39 @@ object SummarisationPrompts {
         return system to user
     }
 
+    fun buildGlobalRulesRefinePrompt(rawRules: String): Pair<String, String> {
+        val system = """
+            You rewrite AI assistant behavioural rules so they are safe for a system prompt without causing looping or self-checking behaviour.
+
+            Fix:
+            - Hard imperatives ("Always", "Never", "Must") → "By default, X. Deviate with a brief note when a request calls for it."
+            - Negative constraints ("don't use X") → positive framing ("use Y instead of X")
+            - Meta-instructions that ask the model to evaluate or verify its own responses → remove entirely
+            - Redundant or circular phrasing → merge or remove
+
+            Preserve: all user preferences and intent; names and specific terms verbatim.
+            Output: the rewritten rules only — no preamble, no explanation, no headers.
+        """.trimIndent()
+        val user = "Rewrite these assistant rules:\n\n$rawRules"
+        return system to user
+    }
+
+    fun buildProjectContextRefinePrompt(rawContext: String): Pair<String, String> {
+        val system = """
+            You rewrite a project's AI context block so it is clean and safe for a system prompt without causing looping behaviour.
+
+            Fix:
+            - Hard imperatives mixed with facts → express as soft defaults; keep facts declarative
+            - Instructions that cause the model to self-check per response → reframe as defaults
+            - Redundancy → merge; vague statements → tighten
+
+            Preserve: all factual content (names, technologies, goals, identifiers) and the user's intended guidance.
+            Output: the rewritten context only — no preamble, no explanation, no extra headers.
+        """.trimIndent()
+        val user = "Rewrite this project context:\n\n$rawContext"
+        return system to user
+    }
+
     fun buildCompressPrompt(existingMemory: String, pinned: List<String>): Pair<String, String> {
         val pinnedBlock = if (pinned.isEmpty()) "" else
             "\n\nPinned lines (must appear in the output verbatim):\n" +

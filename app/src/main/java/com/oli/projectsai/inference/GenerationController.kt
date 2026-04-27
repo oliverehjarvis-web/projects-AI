@@ -382,7 +382,7 @@ private fun currentTemporalContext(): String {
     val now = java.time.ZonedDateTime.now()
     val date = now.format(java.time.format.DateTimeFormatter.ofPattern("EEEE, d MMMM yyyy"))
     val time = now.format(java.time.format.DateTimeFormatter.ofPattern("HH:mm"))
-    return "Current context:\n- Date: $date\n- Time: $time\n- Timezone: ${now.zone.id}"
+    return "<date_time>\n- Date: $date\n- Time: $time\n- Timezone: ${now.zone.id}\n</date_time>"
 }
 
 private val SEARCH_TAG_REGEX = Regex("<search>(.*?)</search>", RegexOption.DOT_MATCHES_ALL)

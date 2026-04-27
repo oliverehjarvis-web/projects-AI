@@ -3,6 +3,11 @@ package com.oli.projectsai.ui.settings
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.oli.projectsai.data.preferences.GlobalContextStore
+import com.oli.projectsai.inference.ChatMessage
+import com.oli.projectsai.inference.GenerationConfig
+import com.oli.projectsai.inference.InferenceManager
+import com.oli.projectsai.inference.ModelState
+import com.oli.projectsai.inference.SummarisationPrompts
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -13,7 +18,8 @@ import javax.inject.Inject
 
 @HiltViewModel
 class GlobalContextViewModel @Inject constructor(
-    private val store: GlobalContextStore
+    private val store: GlobalContextStore,
+    private val inferenceManager: InferenceManager
 ) : ViewModel() {
 
     private val _name = MutableStateFlow("")
@@ -24,6 +30,12 @@ class GlobalContextViewModel @Inject constructor(
 
     private val _saved = MutableStateFlow(false)
     val saved: StateFlow<Boolean> = _saved.asStateFlow()
+
+    private val _isRefining = MutableStateFlow(false)
+    val isRefining: StateFlow<Boolean> = _isRefining.asStateFlow()
+
+    private val _refineError = MutableStateFlow<String?>(null)
+    val refineError: StateFlow<String?> = _refineError.asStateFlow()
 
     init {
         viewModelScope.launch {
@@ -48,5 +60,36 @@ class GlobalContextViewModel @Inject constructor(
             store.setRules(_rules.value.trim())
             _saved.value = true
         }
+    }
+
+    fun refineRules() {
+        val raw = _rules.value
+        if (raw.isBlank()) return
+        if (inferenceManager.modelState.value !is ModelState.Loaded) {
+            _refineError.value = "Load a model first to use context refinement."
+            return
+        }
+        viewModelScope.launch {
+            _isRefining.value = true
+            try {
+                val (system, user) = SummarisationPrompts.buildGlobalRulesRefinePrompt(raw)
+                val out = StringBuilder()
+                inferenceManager.generate(
+                    systemPrompt = system,
+                    messages = listOf(ChatMessage(role = "user", content = user)),
+                    config = GenerationConfig()
+                ).collect { chunk -> out.append(chunk) }
+                val refined = out.toString().trim()
+                if (refined.isNotBlank()) updateRules(refined)
+            } catch (t: Throwable) {
+                _refineError.value = "Refinement failed: ${t.message ?: "unknown error"}"
+            } finally {
+                _isRefining.value = false
+            }
+        }
+    }
+
+    fun clearRefineError() {
+        _refineError.value = null
     }
 }

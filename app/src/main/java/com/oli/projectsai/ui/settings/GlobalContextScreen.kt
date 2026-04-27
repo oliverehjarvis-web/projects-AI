@@ -8,6 +8,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -23,6 +24,8 @@ fun GlobalContextScreen(
     val name by viewModel.name.collectAsStateWithLifecycle()
     val rules by viewModel.rules.collectAsStateWithLifecycle()
     val saved by viewModel.saved.collectAsStateWithLifecycle()
+    val isRefining by viewModel.isRefining.collectAsStateWithLifecycle()
+    val refineError by viewModel.refineError.collectAsStateWithLifecycle()
 
     val snackbarHostState = remember { SnackbarHostState() }
 
@@ -30,6 +33,13 @@ fun GlobalContextScreen(
         if (saved) {
             snackbarHostState.showSnackbar("Saved")
             delay(100)
+        }
+    }
+
+    LaunchedEffect(refineError) {
+        if (refineError != null) {
+            snackbarHostState.showSnackbar(refineError!!)
+            viewModel.clearRefineError()
         }
     }
 
@@ -90,6 +100,32 @@ fun GlobalContextScreen(
                 minLines = 6,
                 modifier = Modifier.fillMaxWidth()
             )
+
+            OutlinedButton(
+                onClick = { viewModel.refineRules() },
+                enabled = rules.isNotBlank() && !isRefining,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                if (isRefining) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(18.dp),
+                        strokeWidth = 2.dp,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Text("Refining...")
+                } else {
+                    Text("Refine with AI")
+                }
+            }
+
+            if (isRefining) {
+                Text(
+                    "The model is rewriting your rules to avoid looping patterns. This may take a moment.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
         }
     }
 }

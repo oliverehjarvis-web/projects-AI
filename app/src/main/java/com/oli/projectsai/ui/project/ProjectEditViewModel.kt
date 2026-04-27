@@ -6,7 +6,11 @@ import androidx.lifecycle.viewModelScope
 import com.oli.projectsai.data.db.entity.Project
 import com.oli.projectsai.data.privacy.PrivacySession
 import com.oli.projectsai.data.repository.ProjectRepository
+import com.oli.projectsai.inference.ChatMessage
+import com.oli.projectsai.inference.GenerationConfig
 import com.oli.projectsai.inference.InferenceManager
+import com.oli.projectsai.inference.ModelState
+import com.oli.projectsai.inference.SummarisationPrompts
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -54,6 +58,12 @@ class ProjectEditViewModel @Inject constructor(
     private val _contextTokenCount = MutableStateFlow(0)
     val contextTokenCount: StateFlow<Int> = _contextTokenCount.asStateFlow()
 
+    private val _isRefining = MutableStateFlow(false)
+    val isRefining: StateFlow<Boolean> = _isRefining.asStateFlow()
+
+    private val _refineError = MutableStateFlow<String?>(null)
+    val refineError: StateFlow<String?> = _refineError.asStateFlow()
+
     val contextLengthOptions: List<Int> = listOf(4096, 8192, 16384, 24576, 32768)
 
     private var existingProject: Project? = null
@@ -94,6 +104,37 @@ class ProjectEditViewModel @Inject constructor(
 
     fun updateContextLength(value: Int) {
         if (value in contextLengthOptions) _contextLength.value = value
+    }
+
+    fun refineContext() {
+        val raw = _manualContext.value
+        if (raw.isBlank()) return
+        if (inferenceManager.modelState.value !is ModelState.Loaded) {
+            _refineError.value = "Load a model first to use context refinement."
+            return
+        }
+        viewModelScope.launch {
+            _isRefining.value = true
+            try {
+                val (system, user) = SummarisationPrompts.buildProjectContextRefinePrompt(raw)
+                val out = StringBuilder()
+                inferenceManager.generate(
+                    systemPrompt = system,
+                    messages = listOf(ChatMessage(role = "user", content = user)),
+                    config = GenerationConfig()
+                ).collect { chunk -> out.append(chunk) }
+                val refined = out.toString().trim()
+                if (refined.isNotBlank()) updateManualContext(refined)
+            } catch (t: Throwable) {
+                _refineError.value = "Refinement failed: ${t.message ?: "unknown error"}"
+            } finally {
+                _isRefining.value = false
+            }
+        }
+    }
+
+    fun clearRefineError() {
+        _refineError.value = null
     }
 
     fun updateIsSecret(value: Boolean) {
