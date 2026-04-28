@@ -57,6 +57,7 @@ import java.io.File
 @Composable
 fun ChatScreen(
     onNavigateBack: () -> Unit,
+    onNavigateToRepoBrowser: () -> Unit,
     viewModel: ChatViewModel = hiltViewModel()
 ) {
     val messages by viewModel.messages.collectAsStateWithLifecycle()
@@ -73,6 +74,7 @@ fun ChatScreen(
     val searchStatus by viewModel.searchStatus.collectAsStateWithLifecycle()
 
     val systemContext by viewModel.systemContext.collectAsStateWithLifecycle()
+    val stagedRepoFiles by viewModel.stagedRepoFiles.collectAsStateWithLifecycle()
 
     var inputText by remember { mutableStateOf("") }
     var showTokenDetail by remember { mutableStateOf(false) }
@@ -142,6 +144,9 @@ fun ChatScreen(
                     }
                 },
                 actions = {
+                    IconButton(onClick = onNavigateToRepoBrowser) {
+                        Icon(Icons.Default.Source, "Browse GitHub repo")
+                    }
                     IconButton(onClick = { viewModel.toggleWebSearch() }) {
                         Icon(
                             if (webSearchEnabled) Icons.Default.TravelExplore else Icons.Default.Public,
@@ -319,6 +324,38 @@ fun ChatScreen(
                 if (isGenerating && streamingContent.isBlank()) {
                     item {
                         ThinkingIndicator()
+                    }
+                }
+            }
+
+            // Staged repo files (from the GitHub browser) — attached to the next outgoing turn.
+            stagedRepoFiles?.let { staged ->
+                Surface(tonalElevation = 2.dp) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 12.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Icon(
+                            Icons.Default.Source,
+                            contentDescription = null,
+                            modifier = Modifier.size(16.dp),
+                            tint = MaterialTheme.colorScheme.primary
+                        )
+                        Text(
+                            "${staged.files.size} file${if (staged.files.size == 1) "" else "s"} from " +
+                                "${staged.owner}/${staged.repo} attached to next message",
+                            style = MaterialTheme.typography.bodySmall,
+                            modifier = Modifier.weight(1f)
+                        )
+                        IconButton(
+                            onClick = { viewModel.clearStagedRepoFiles() },
+                            modifier = Modifier.size(28.dp)
+                        ) {
+                            Icon(Icons.Default.Close, "Remove", modifier = Modifier.size(14.dp))
+                        }
                     }
                 }
             }

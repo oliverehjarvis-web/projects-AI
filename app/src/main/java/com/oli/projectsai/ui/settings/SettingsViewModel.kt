@@ -7,6 +7,8 @@ import androidx.core.content.FileProvider
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.oli.projectsai.BuildConfig
+import com.oli.projectsai.data.github.GitHubClient
+import com.oli.projectsai.data.preferences.GitHubSettings
 import com.oli.projectsai.data.preferences.RemoteSettings
 import com.oli.projectsai.data.preferences.SearchDepth
 import com.oli.projectsai.data.preferences.SearchSettings
@@ -69,6 +71,8 @@ class SettingsViewModel @Inject constructor(
     private val searchSettings: SearchSettings,
     private val remoteSettings: RemoteSettings,
     private val voiceSettings: VoiceSettings,
+    private val githubSettings: GitHubSettings,
+    private val githubClient: GitHubClient,
     private val syncRepository: SyncRepository
 ) : ViewModel() {
 
@@ -110,6 +114,38 @@ class SettingsViewModel @Inject constructor(
     val voiceModelPath: StateFlow<String> = voiceSettings.voiceModelPath.stateIn(
         viewModelScope, SharingStarted.Eagerly, ""
     )
+
+    val githubPat: StateFlow<String> = githubSettings.pat.stateIn(
+        viewModelScope, SharingStarted.Eagerly, ""
+    )
+    val githubDefaultRepo: StateFlow<String> = githubSettings.defaultRepo.stateIn(
+        viewModelScope, SharingStarted.Eagerly, ""
+    )
+
+    private val _githubTestState = MutableStateFlow<String?>(null)
+    val githubTestState: StateFlow<String?> = _githubTestState.asStateFlow()
+
+    fun setGithubPat(value: String) {
+        viewModelScope.launch { githubSettings.setPat(value) }
+    }
+
+    fun setGithubDefaultRepo(value: String) {
+        viewModelScope.launch { githubSettings.setDefaultRepo(value) }
+    }
+
+    fun testGithubConnection() {
+        viewModelScope.launch {
+            _githubTestState.value = "Testing…"
+            try {
+                val login = githubClient.whoami()
+                _githubTestState.value = "Connected as $login"
+            } catch (t: Throwable) {
+                _githubTestState.value = t.message ?: "Connection failed"
+            }
+        }
+    }
+
+    fun dismissGithubTestState() { _githubTestState.value = null }
 
     private val _voiceModelOptions = MutableStateFlow<List<ModelFile>>(emptyList())
     val voiceModelOptions: StateFlow<List<ModelFile>> = _voiceModelOptions.asStateFlow()

@@ -175,6 +175,22 @@ fun SettingsScreen(
 
             HorizontalDivider()
 
+            // GitHub section — drives the in-chat repo browser.
+            val githubPat by viewModel.githubPat.collectAsStateWithLifecycle()
+            val githubDefaultRepo by viewModel.githubDefaultRepo.collectAsStateWithLifecycle()
+            val githubTestState by viewModel.githubTestState.collectAsStateWithLifecycle()
+            GitHubSection(
+                pat = githubPat,
+                defaultRepo = githubDefaultRepo,
+                testState = githubTestState,
+                onPatChange = { viewModel.setGithubPat(it) },
+                onDefaultRepoChange = { viewModel.setGithubDefaultRepo(it) },
+                onTestConnection = { viewModel.testGithubConnection() },
+                onDismissTestState = { viewModel.dismissGithubTestState() }
+            )
+
+            HorizontalDivider()
+
             // Backends section
             Text(
                 "Backends",
@@ -789,6 +805,64 @@ private fun DepthOption(
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
+        }
+    }
+}
+
+@Composable
+private fun GitHubSection(
+    pat: String,
+    defaultRepo: String,
+    testState: String?,
+    onPatChange: (String) -> Unit,
+    onDefaultRepoChange: (String) -> Unit,
+    onTestConnection: () -> Unit,
+    onDismissTestState: () -> Unit
+) {
+    Column(
+        modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        Text("GitHub", style = MaterialTheme.typography.titleSmall)
+        Text(
+            "Personal Access Token used by the in-chat repo browser to read your private repos. " +
+                "Fine-grained PATs are recommended — minimum scope, expires automatically.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        OutlinedTextField(
+            value = pat,
+            onValueChange = onPatChange,
+            label = { Text("PAT") },
+            placeholder = { Text("github_pat_…") },
+            singleLine = true,
+            visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation(),
+            modifier = Modifier.fillMaxWidth()
+        )
+        OutlinedTextField(
+            value = defaultRepo,
+            onValueChange = onDefaultRepoChange,
+            label = { Text("Default repo (optional)") },
+            placeholder = { Text("owner/repo") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth()
+        )
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            OutlinedButton(onClick = onTestConnection, enabled = pat.isNotBlank()) {
+                Text("Test connection")
+            }
+            Spacer(Modifier.width(12.dp))
+            testState?.let { msg ->
+                Text(
+                    msg,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.weight(1f)
+                )
+                IconButton(onClick = onDismissTestState) {
+                    Icon(Icons.Default.Close, "Dismiss")
+                }
+            }
         }
     }
 }

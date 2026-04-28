@@ -15,6 +15,7 @@ import com.oli.projectsai.data.attachments.AttachmentStore
 import com.oli.projectsai.data.db.entity.Chat
 import com.oli.projectsai.data.db.entity.Message
 import com.oli.projectsai.data.db.entity.MessageRole
+import com.oli.projectsai.data.github.RepoSelectionStore
 import com.oli.projectsai.data.preferences.GlobalContextStore
 import com.oli.projectsai.data.repository.ChatRepository
 import com.oli.projectsai.data.repository.ProjectRepository
@@ -53,8 +54,14 @@ class ChatViewModel @Inject constructor(
     private val globalContextStore: GlobalContextStore,
     private val attachmentStore: AttachmentStore,
     private val generationController: GenerationController,
+    private val repoSelectionStore: RepoSelectionStore,
     @ApplicationContext private val appContext: Context
 ) : ViewModel() {
+
+    /** Files staged from the GitHub repo browser, attached to the next outgoing turn. */
+    val stagedRepoFiles: StateFlow<RepoSelectionStore.Selection?> = repoSelectionStore.staged
+
+    fun clearStagedRepoFiles() = repoSelectionStore.clear()
 
     private val chatId: Long = savedStateHandle.get<Long>("chatId") ?: -1L
     private val projectId: Long = savedStateHandle.get<Long>("projectId") ?: -1L
@@ -231,6 +238,16 @@ class ChatViewModel @Inject constructor(
         if (memory.isNotBlank()) add("<memory>\n${trimMemoryToLimit(memory)}\n</memory>")
     }.joinToString("\n\n")
 
+    /** Wraps the staged repo files in an XML block the model can refer back to. */
+    private fun buildRepoContextBlock(selection: RepoSelectionStore.Selection?): String {
+        if (selection == null || selection.files.isEmpty()) return ""
+        val header = "<repo_context owner=\"${selection.owner}\" repo=\"${selection.repo}\" ref=\"${selection.ref}\">"
+        val body = selection.files.joinToString("\n") { f ->
+            "<file path=\"${f.path}\">\n${f.text}\n</file>"
+        }
+        return "$header\n$body\n</repo_context>"
+    }
+
     private suspend fun refreshContextTokenBreakdown(
         name: String,
         rules: String,
@@ -367,11 +384,21 @@ class ChatViewModel @Inject constructor(
             if (bd.contextLimit > 0 && bd.remaining > 0) (bd.remaining - 200).coerceIn(256, 16000)
             else 16000
         }
+        // Pull the staged repo files (if any) and append them to the system prompt for this
+        // turn. The block is then cleared so follow-up turns don't keep re-injecting them —
+        // the user can re-stage from the browser whenever they need them again.
+        val stagedSelection = repoSelectionStore.staged.value
+        val repoBlock = buildRepoContextBlock(stagedSelection)
+        val effectiveSystemPrompt = if (repoBlock.isBlank()) systemPrompt
+        else if (systemPrompt.isBlank()) repoBlock
+        else "$systemPrompt\n\n$repoBlock"
+        if (stagedSelection != null) repoSelectionStore.clear()
+
         val params = GenerationParams(
             chatId = activeChatId,
             currentUserContent = currentUserContent,
             currentAttachments = currentAttachments,
-            systemPrompt = systemPrompt,
+            systemPrompt = effectiveSystemPrompt,
             webSearchEnabled = _webSearchEnabled.value,
             chatTitleHint = titleHint,
             backendId = preferredBackendId,
