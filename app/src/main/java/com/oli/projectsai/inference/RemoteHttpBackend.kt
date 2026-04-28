@@ -137,6 +137,7 @@ class RemoteHttpBackend @Inject constructor(
                 put("temperature", config.temperature.toDouble())
                 put("top_p", config.topP.toDouble())
                 put("apply_default_preamble", config.applyDefaultPreamble)
+                config.numCtx?.let { put("num_ctx", it) }
             })
         }.toString()
 

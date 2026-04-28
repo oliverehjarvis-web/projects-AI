@@ -186,6 +186,8 @@ class ChatViewModel @Inject constructor(
     private var contextProjectId: Long = -1L
     @Volatile private var preferredBackendId: String? = null
     @Volatile private var contextMemoryTokenLimit: Int = Int.MAX_VALUE
+    /** Project context length, forwarded to the remote backend as num_ctx. */
+    @Volatile private var contextWindowTokens: Int = 16384
 
     private suspend fun loadProjectContext(pid: Long) {
         contextProjectId = pid
@@ -193,6 +195,7 @@ class ChatViewModel @Inject constructor(
         preferredBackendId = if (project.preferredBackend == com.oli.projectsai.data.db.entity.PreferredBackend.REMOTE)
             "remote_http" else null
         contextMemoryTokenLimit = project.memoryTokenLimit
+        contextWindowTokens = project.contextLength
         val name = globalContextStore.name.first()
         val rules = globalContextStore.rules.first()
         systemPrompt = buildSystemPrompt(name, rules, project.manualContext, project.accumulatedMemory)
@@ -375,7 +378,10 @@ class ChatViewModel @Inject constructor(
             // Quick Actions are short, direct operations that don't benefit from the server's
             // reasoning preamble — suppress it so responses stay concise.
             applyDefaultPreamble = quickActionId == -1L,
-            maxOutputTokens = adaptiveMaxTokens
+            maxOutputTokens = adaptiveMaxTokens,
+            // Forwarded as Ollama's num_ctx for remote calls. Without it the 26B silently
+            // ran at the 2048 default regardless of the project's contextLength setting.
+            numCtx = contextWindowTokens
         )
         val started = generationController.start(params)
         if (started) {

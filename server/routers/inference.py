@@ -44,6 +44,10 @@ class InferenceConfig(BaseModel):
     # When False the _REASONING_PREAMBLE is omitted from the system prompt. Set to
     # False for Quick Actions and other short-form requests that need direct responses.
     apply_default_preamble: bool = True
+    # Ollama loads each model with a default num_ctx of 2048 unless we override it
+    # per-request. Clients pass their per-project context length here so the 26B on
+    # the NAS actually sees the long-context payload instead of silently truncating.
+    num_ctx: int | None = None
 
 
 class InferenceRequest(BaseModel):
@@ -133,15 +137,18 @@ async def _stream_ollama(req: InferenceRequest) -> AsyncIterator[str]:
             msg["images"] = m.images
         ollama_messages.append(msg)
 
+    options: dict = {
+        "num_predict": req.config.max_tokens,
+        "temperature": req.config.temperature,
+        "top_p": req.config.top_p,
+    }
+    if req.config.num_ctx:
+        options["num_ctx"] = req.config.num_ctx
     body = {
         "model": req.config.model,
         "messages": ollama_messages,
         "stream": True,
-        "options": {
-            "num_predict": req.config.max_tokens,
-            "temperature": req.config.temperature,
-            "top_p": req.config.top_p,
-        },
+        "options": options,
     }
 
     # Flush a heartbeat before we even contact Ollama so any intermediate proxy
@@ -156,7 +163,12 @@ async def _stream_ollama(req: InferenceRequest) -> AsyncIterator[str]:
     _SENTINEL = object()
     queue: asyncio.Queue = asyncio.Queue()
     started = time.monotonic()
-    _log("generate start model=%s msgs=%d", req.config.model, len(ollama_messages))
+    _log(
+        "generate start model=%s msgs=%d num_ctx=%s",
+        req.config.model,
+        len(ollama_messages),
+        req.config.num_ctx if req.config.num_ctx else "default",
+    )
 
     async def pump() -> None:
         try:

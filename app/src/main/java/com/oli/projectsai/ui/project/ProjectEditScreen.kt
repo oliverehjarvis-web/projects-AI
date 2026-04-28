@@ -153,7 +153,32 @@ fun ProjectEditScreen(
 
             HorizontalDivider()
 
-            Text("Context length", style = MaterialTheme.typography.titleSmall)
+            val autoContextHint by viewModel.autoContextHint.collectAsStateWithLifecycle()
+            val isComputingAutoContext by viewModel.isComputingAutoContext.collectAsStateWithLifecycle()
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = androidx.compose.ui.Alignment.CenterVertically
+            ) {
+                Text(
+                    "Context length",
+                    style = MaterialTheme.typography.titleSmall,
+                    modifier = Modifier.weight(1f)
+                )
+                TextButton(
+                    onClick = { viewModel.autoFillContextLength() },
+                    enabled = !isComputingAutoContext
+                ) {
+                    if (isComputingAutoContext) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(14.dp),
+                            strokeWidth = 2.dp
+                        )
+                        Spacer(Modifier.width(6.dp))
+                    }
+                    Text("Auto")
+                }
+            }
             Text(
                 "Larger context lets the model remember more of a conversation but slows generation. " +
                     "Changing this reloads the model when you next open a chat in this project.",
@@ -185,6 +210,13 @@ fun ProjectEditScreen(
                         else MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
+            }
+            autoContextHint?.let { hint ->
+                Text(
+                    hint,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
             }
 
             HorizontalDivider()

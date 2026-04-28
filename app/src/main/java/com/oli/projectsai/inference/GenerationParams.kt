@@ -9,5 +9,7 @@ data class GenerationParams(
     val chatTitleHint: String,
     val backendId: String? = null,
     val applyDefaultPreamble: Boolean = true,
-    val maxOutputTokens: Int = 16000
+    val maxOutputTokens: Int = 16000,
+    /** Forwarded to remote backends so Ollama loads with the right window. */
+    val numCtx: Int? = null
 )

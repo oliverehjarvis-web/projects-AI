@@ -7,7 +7,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from db import init_db
-from routers import health, inference, sync, models
+from routers import health, inference, server_info, sync, models
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +34,7 @@ async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONR
 
 app.include_router(health.router)
 app.include_router(inference.router)
+app.include_router(server_info.router)
 app.include_router(sync.router)
 app.include_router(models.router)
 

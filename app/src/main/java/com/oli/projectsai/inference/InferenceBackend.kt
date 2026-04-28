@@ -23,7 +23,14 @@ data class GenerationConfig(
     val randomSeed: Int = 0,
     // When false the server skips prepending _REASONING_PREAMBLE. Useful for Quick
     // Actions that need short, direct responses and don't benefit from reasoning guidance.
-    val applyDefaultPreamble: Boolean = true
+    val applyDefaultPreamble: Boolean = true,
+    /**
+     * Forwarded to the remote backend as Ollama's `num_ctx` so the model is loaded with
+     * the requested context window. Null means "let the server fall back to its default"
+     * (which on Ollama is 2048 — fine for short prompts but wrong for repo ingestion).
+     * Ignored by the local backend, which sets context at model-load time via [ModelInfo].
+     */
+    val numCtx: Int? = null
 )
 
 enum class ModelPrecision(@StringRes val displayNameRes: Int, val estimatedRamGb: Float) {

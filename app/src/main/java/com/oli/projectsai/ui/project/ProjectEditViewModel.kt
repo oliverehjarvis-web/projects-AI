@@ -7,8 +7,11 @@ import com.oli.projectsai.data.db.entity.Project
 import com.oli.projectsai.data.privacy.PrivacySession
 import com.oli.projectsai.data.repository.ProjectRepository
 import com.oli.projectsai.inference.ChatMessage
+import com.oli.projectsai.inference.ContextSizing
 import com.oli.projectsai.inference.GenerationConfig
 import com.oli.projectsai.inference.InferenceManager
+import com.oli.projectsai.inference.ModelInfo
+import com.oli.projectsai.inference.ModelPrecision
 import com.oli.projectsai.inference.ModelState
 import com.oli.projectsai.inference.SummarisationPrompts
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -24,6 +27,7 @@ class ProjectEditViewModel @Inject constructor(
     savedStateHandle: SavedStateHandle,
     private val projectRepository: ProjectRepository,
     private val inferenceManager: InferenceManager,
+    private val contextSizing: ContextSizing,
     privacySession: PrivacySession
 ) : ViewModel() {
 
@@ -64,7 +68,14 @@ class ProjectEditViewModel @Inject constructor(
     private val _refineError = MutableStateFlow<String?>(null)
     val refineError: StateFlow<String?> = _refineError.asStateFlow()
 
-    val contextLengthOptions: List<Int> = listOf(4096, 8192, 16384, 24576, 32768)
+    val contextLengthOptions: List<Int> = ContextSizing.PICKER_STEPS
+
+    private val _autoContextHint = MutableStateFlow<String?>(null)
+    /** Human-readable rationale shown next to the picker after Auto runs. */
+    val autoContextHint: StateFlow<String?> = _autoContextHint.asStateFlow()
+
+    private val _isComputingAutoContext = MutableStateFlow(false)
+    val isComputingAutoContext: StateFlow<Boolean> = _isComputingAutoContext.asStateFlow()
 
     private var existingProject: Project? = null
 
@@ -104,7 +115,43 @@ class ProjectEditViewModel @Inject constructor(
 
     fun updateContextLength(value: Int) {
         if (value in contextLengthOptions) _contextLength.value = value
+        _autoContextHint.value = null
     }
+
+    /**
+     * Picks a context length that fits in available RAM, on-device or on the NAS, and
+     * sets it on the form. The user can still tweak afterwards.
+     */
+    fun autoFillContextLength() {
+        viewModelScope.launch {
+            _isComputingAutoContext.value = true
+            try {
+                val info = inferenceManager.modelState.value.let {
+                    when (it) {
+                        is ModelState.Loaded -> it.modelInfo
+                        is ModelState.Loading -> it.modelInfo
+                        else -> null
+                    }
+                } ?: stubModelInfoForAuto()
+                val rec = if (_useRemoteBackend.value)
+                    contextSizing.forRemote(info)
+                else
+                    contextSizing.forLocal(info)
+                _contextLength.value = rec.tokens
+                _autoContextHint.value = "Auto-picked ${rec.tokens / 1024}k. ${rec.rationale}"
+            } finally {
+                _isComputingAutoContext.value = false
+            }
+        }
+    }
+
+    private fun stubModelInfoForAuto(): ModelInfo = ModelInfo(
+        // Best guess for a typical local model when nothing's loaded — sizing will fall
+        // back to a 4B-ish footprint, which is the common case on the phone.
+        name = "gemma4-e4b",
+        precision = ModelPrecision.Q4,
+        filePath = ""
+    )
 
     fun refineContext() {
         val raw = _manualContext.value
