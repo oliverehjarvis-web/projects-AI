@@ -14,6 +14,8 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.withContext
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -149,11 +151,16 @@ class LocalMediaPipeBackend @Inject constructor(
         val e = engine ?: throw InferenceError.ModelNotLoaded
         require(pcm16MonoBytes.isNotEmpty()) { "Empty audio buffer" }
 
+        // LiteRT-LM 0.10's audio preprocessor uses miniaudio's ma_decoder, which
+        // requires a container format (WAV/AIFF/MP3...) — passing raw PCM gets
+        // "Failed to initialize miniaudio decoder". Wrap as a 16 kHz mono WAV.
+        val wav = pcmToWav(pcm16MonoBytes, sampleRate = 16_000, channels = 1)
+
         try {
             e.createConversation(ConversationConfig()).use { conversation ->
                 val response = conversation.sendMessage(
                     Contents.of(
-                        Content.AudioBytes(pcm16MonoBytes),
+                        Content.AudioBytes(wav),
                         Content.Text(promptOverride ?: TRANSCRIBE_PROMPT)
                     )
                 )
@@ -172,5 +179,30 @@ class LocalMediaPipeBackend @Inject constructor(
     override suspend fun countTokens(text: String): Int = withContext(Dispatchers.Default) {
         if (text.isEmpty()) 0
         else (text.length / charsPerToken).toInt().coerceAtLeast(1)
+    }
+
+    /** Wraps raw 16-bit little-endian PCM in a minimal 44-byte WAV (RIFF/fmt/data) header. */
+    private fun pcmToWav(pcm: ByteArray, sampleRate: Int, channels: Int): ByteArray {
+        val bitsPerSample = 16
+        val byteRate = sampleRate * channels * bitsPerSample / 8
+        val blockAlign = channels * bitsPerSample / 8
+        val dataSize = pcm.size
+        val out = ByteArray(44 + dataSize)
+        val header = ByteBuffer.wrap(out, 0, 44).order(ByteOrder.LITTLE_ENDIAN)
+        header.put("RIFF".toByteArray(Charsets.US_ASCII))
+        header.putInt(36 + dataSize)
+        header.put("WAVE".toByteArray(Charsets.US_ASCII))
+        header.put("fmt ".toByteArray(Charsets.US_ASCII))
+        header.putInt(16)                          // fmt chunk size (PCM)
+        header.putShort(1.toShort())               // audio format = PCM
+        header.putShort(channels.toShort())
+        header.putInt(sampleRate)
+        header.putInt(byteRate)
+        header.putShort(blockAlign.toShort())
+        header.putShort(bitsPerSample.toShort())
+        header.put("data".toByteArray(Charsets.US_ASCII))
+        header.putInt(dataSize)
+        System.arraycopy(pcm, 0, out, 44, dataSize)
+        return out
     }
 }
