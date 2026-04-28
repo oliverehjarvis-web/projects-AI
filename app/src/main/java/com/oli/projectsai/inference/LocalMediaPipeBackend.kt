@@ -142,7 +142,10 @@ class LocalMediaPipeBackend @Inject constructor(
         return parts.joinToString("\n\n")
     }
 
-    override suspend fun transcribe(pcm16MonoBytes: ByteArray): String = withContext(Dispatchers.IO) {
+    override suspend fun transcribe(
+        pcm16MonoBytes: ByteArray,
+        promptOverride: String?
+    ): String = withContext(Dispatchers.IO) {
         val e = engine ?: throw InferenceError.ModelNotLoaded
         require(pcm16MonoBytes.isNotEmpty()) { "Empty audio buffer" }
 
@@ -151,7 +154,7 @@ class LocalMediaPipeBackend @Inject constructor(
                 val response = conversation.sendMessage(
                     Contents.of(
                         Content.AudioBytes(pcm16MonoBytes),
-                        Content.Text(TRANSCRIBE_PROMPT)
+                        Content.Text(promptOverride ?: TRANSCRIBE_PROMPT)
                     )
                 )
                 response.contents.contents

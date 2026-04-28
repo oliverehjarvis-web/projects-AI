@@ -54,6 +54,36 @@ object SummarisationPrompts {
         return system to user
     }
 
+    /**
+     * Replacement prompt for [LocalMediaPipeBackend.transcribe] when the user has asked for
+     * speaker labels. The model can only see one chunk at a time, so labels here are local —
+     * the reconcile pass below renumbers them across chunks.
+     */
+    fun buildDiarizedTranscriptionHint(): String =
+        "Transcribe the audio verbatim. When you can clearly hear a change of speaker, " +
+            "start that turn with 'Speaker 1:', 'Speaker 2:' etc. on a new line. If you cannot " +
+            "tell who is speaking, do not invent a label. Output only the transcript."
+
+    fun buildSpeakerReconcilePrompt(rawTranscript: String): Pair<String, String> {
+        val system = """
+            You receive a transcript that was produced one chunk at a time. Each chunk used its own
+            local speaker numbering, so the same person may be labelled "Speaker 1" in one chunk and
+            "Speaker 2" in another, or vice versa.
+
+            Renumber the speakers so each real-world person has a single consistent label across the
+            whole transcript. Use turn-taking, addressed names, and content style as cues. Where a
+            chunk has no speaker labels, leave the text unlabelled rather than guessing.
+
+            Also collapse any "[chunk N]" markers and stitch overlapping sentences at chunk boundaries
+            into a single clean read.
+
+            Preserve every word of the speech itself. Output only the cleaned transcript — no preamble,
+            no commentary, no markdown headers.
+        """.trimIndent()
+        val user = "Reconcile speakers in this transcript:\n\n$rawTranscript"
+        return system to user
+    }
+
     fun buildCompressPrompt(existingMemory: String, pinned: List<String>): Pair<String, String> {
         val pinnedBlock = if (pinned.isEmpty()) "" else
             "\n\nPinned lines (must appear in the output verbatim):\n" +

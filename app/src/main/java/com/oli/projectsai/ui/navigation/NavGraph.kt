@@ -18,6 +18,7 @@ import com.oli.projectsai.ui.project.ProjectEditScreen
 import com.oli.projectsai.ui.settings.GlobalContextScreen
 import com.oli.projectsai.ui.settings.ModelManagementScreen
 import com.oli.projectsai.ui.settings.SettingsScreen
+import com.oli.projectsai.ui.transcription.LongFormTranscriptionScreen
 import com.oli.projectsai.ui.transcription.TranscriptionScreen
 
 object Routes {
@@ -31,6 +32,7 @@ object Routes {
     const val MODEL_MANAGEMENT = "settings/model"
     const val GLOBAL_CONTEXT = "settings/global-context"
     const val TRANSCRIPTION = "transcription"
+    const val LONG_TRANSCRIPTION = "transcription/long"
     const val PRIVATE_GATE = "private/gate"
     const val PRIVATE_SETUP = "private/setup"
     const val PRIVATE_UNLOCK = "private/unlock"
@@ -189,7 +191,20 @@ fun ProjectsAINavGraph(navController: NavHostController) {
         composable(Routes.TRANSCRIPTION) {
             TranscriptionScreen(
                 onNavigateBack = { navController.popBackStack() },
-                onNavigateToModelManagement = { navController.navigate(Routes.MODEL_MANAGEMENT) }
+                onNavigateToModelManagement = { navController.navigate(Routes.MODEL_MANAGEMENT) },
+                onNavigateToLongForm = { navController.navigate(Routes.LONG_TRANSCRIPTION) }
+            )
+        }
+
+        composable(Routes.LONG_TRANSCRIPTION) {
+            LongFormTranscriptionScreen(
+                onNavigateBack = { navController.popBackStack() },
+                onNavigateToModelManagement = { navController.navigate(Routes.MODEL_MANAGEMENT) },
+                onNavigateToChat = { chatId ->
+                    navController.navigate(Routes.chat(chatId)) {
+                        popUpTo(Routes.HOME)
+                    }
+                }
             )
         }
     }

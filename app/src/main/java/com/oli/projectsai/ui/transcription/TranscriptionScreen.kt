@@ -26,6 +26,7 @@ import com.oli.projectsai.inference.TRANSCRIPTION_MAX_SECONDS
 fun TranscriptionScreen(
     onNavigateBack: () -> Unit,
     onNavigateToModelManagement: () -> Unit,
+    onNavigateToLongForm: () -> Unit,
     viewModel: TranscriptionViewModel = hiltViewModel()
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
@@ -50,6 +51,14 @@ fun TranscriptionScreen(
                     }
                 },
                 actions = {
+                    val canOpenLongForm = state is TranscriptionViewModel.RecordingState.Idle ||
+                        state is TranscriptionViewModel.RecordingState.Done ||
+                        state is TranscriptionViewModel.RecordingState.Error
+                    if (canOpenLongForm) {
+                        IconButton(onClick = onNavigateToLongForm) {
+                            Icon(Icons.Default.UploadFile, "Long-form transcribe")
+                        }
+                    }
                     if (state is TranscriptionViewModel.RecordingState.Done ||
                         state is TranscriptionViewModel.RecordingState.Error
                     ) {
@@ -111,7 +120,7 @@ fun TranscriptionScreen(
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
             when (val s = state) {
-                is TranscriptionViewModel.RecordingState.Idle -> IdleContent()
+                is TranscriptionViewModel.RecordingState.Idle -> IdleContent(onNavigateToLongForm)
 
                 is TranscriptionViewModel.RecordingState.PreparingModel -> PreparingModelContent()
 
@@ -159,14 +168,14 @@ fun TranscriptionScreen(
 }
 
 @Composable
-private fun IdleContent() {
+private fun IdleContent(onNavigateToLongForm: () -> Unit) {
     Box(
         modifier = Modifier.fillMaxSize(),
         contentAlignment = Alignment.Center
     ) {
         Column(
             horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(8.dp)
+            verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             Icon(
                 Icons.Default.Mic,
@@ -179,6 +188,11 @@ private fun IdleContent() {
                 style = MaterialTheme.typography.bodyLarge,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
+            TextButton(onClick = onNavigateToLongForm) {
+                Icon(Icons.Default.UploadFile, null, modifier = Modifier.size(16.dp))
+                Spacer(Modifier.width(4.dp))
+                Text("Have a longer recording? Upload a file")
+            }
         }
     }
 }

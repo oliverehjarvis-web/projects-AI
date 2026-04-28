@@ -90,9 +90,9 @@ class InferenceManager @Inject constructor(
         return backend.generate(systemPrompt, messages, config)
     }
 
-    suspend fun transcribe(pcm16MonoBytes: ByteArray): String {
+    suspend fun transcribe(pcm16MonoBytes: ByteArray, promptOverride: String? = null): String {
         val backend = getActiveBackend() ?: throw InferenceError.ModelNotLoaded
-        return backend.transcribe(pcm16MonoBytes)
+        return backend.transcribe(pcm16MonoBytes, promptOverride)
     }
 
     /**
@@ -105,9 +105,12 @@ class InferenceManager @Inject constructor(
     }
 
     /** Transcribes via the on-device backend regardless of which backend is active for chat. */
-    suspend fun transcribeViaLocal(pcm16MonoBytes: ByteArray): String {
+    suspend fun transcribeViaLocal(
+        pcm16MonoBytes: ByteArray,
+        promptOverride: String? = null
+    ): String {
         if (!localBackend.isLoaded) throw InferenceError.ModelNotLoaded
-        return localBackend.transcribe(pcm16MonoBytes)
+        return localBackend.transcribe(pcm16MonoBytes, promptOverride)
     }
 
     /** True when the local backend has a model resident and ready for transcription. */

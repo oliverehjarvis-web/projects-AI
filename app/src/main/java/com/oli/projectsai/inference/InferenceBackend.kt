@@ -80,8 +80,12 @@ interface InferenceBackend {
      * Transcribes a PCM 16-bit mono 16 kHz audio buffer using the loaded model's audio encoder.
      * The buffer must be ≤ [TRANSCRIPTION_MAX_SECONDS] of audio.
      * Runs as a fresh Conversation so chat history is not polluted.
+     *
+     * [promptOverride] replaces the default transcription instruction — used by long-form
+     * transcription to request speaker labels per chunk. Local backend honours it; remote
+     * backends may ignore it.
      */
-    suspend fun transcribe(pcm16MonoBytes: ByteArray): String
+    suspend fun transcribe(pcm16MonoBytes: ByteArray, promptOverride: String? = null): String
 
     suspend fun countTokens(text: String): Int
 }

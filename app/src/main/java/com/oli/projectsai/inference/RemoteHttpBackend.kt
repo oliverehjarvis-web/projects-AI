@@ -207,7 +207,7 @@ class RemoteHttpBackend @Inject constructor(
         }.flowOn(Dispatchers.IO)
     }
 
-    override suspend fun transcribe(pcm16MonoBytes: ByteArray): String {
+    override suspend fun transcribe(pcm16MonoBytes: ByteArray, promptOverride: String?): String {
         throw InferenceError.TranscriptionFailed(UnsupportedOperationException("Transcription is not supported on the remote backend"))
     }
 
