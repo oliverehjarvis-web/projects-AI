@@ -48,4 +48,6 @@ class ChatRepository @Inject constructor(
     suspend fun addMessage(message: Message): Long = messageDao.insert(message)
 
     suspend fun updateMessage(message: Message) = messageDao.update(message)
+
+    suspend fun softDeleteMessage(id: Long) = messageDao.softDelete(id)
 }

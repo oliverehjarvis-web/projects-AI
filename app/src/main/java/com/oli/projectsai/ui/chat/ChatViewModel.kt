@@ -323,6 +323,21 @@ class ChatViewModel @Inject constructor(
         startGeneration(content, attachments, _chatTitle.value)
     }
 
+    fun regenerateLastResponse() {
+        if (generationController.activeGeneration.value != null) return
+        val msgs = _messages.value
+        val lastAssistant = msgs.lastOrNull { it.role == MessageRole.ASSISTANT } ?: return
+        // Only regenerate if the assistant's reply is the most recent message — otherwise
+        // the user has typed something in between and a regenerate is ambiguous.
+        if (msgs.last().id != lastAssistant.id) return
+        viewModelScope.launch {
+            runCatching { chatRepository.softDeleteMessage(lastAssistant.id) }
+            // Pass null so generation reuses the (now last) user message from the DB
+            // verbatim instead of appending it again.
+            startGeneration(null, emptyList(), _chatTitle.value)
+        }
+    }
+
     fun cancelGeneration() {
         if (!isGenerating.value) return
         generationController.cancel()

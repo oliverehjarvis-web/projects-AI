@@ -45,12 +45,12 @@ import androidx.core.content.ContextCompat
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.foundation.text.selection.SelectionContainer
-import com.halilibo.richtext.markdown.Markdown
-import com.halilibo.richtext.ui.material3.RichText
+import androidx.compose.foundation.lazy.itemsIndexed
 import com.oli.projectsai.data.db.entity.Message
 import com.oli.projectsai.data.db.entity.MessageRole
 import com.oli.projectsai.ui.components.TokenCounter
 import com.oli.projectsai.ui.memory.AddToMemoryDialog
+import kotlinx.coroutines.launch
 import java.io.File
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -80,6 +80,11 @@ fun ChatScreen(
     var showContextDialog by remember { mutableStateOf(false) }
     val listState = rememberLazyListState()
     val context = LocalContext.current
+    val snackbarHostState = remember { SnackbarHostState() }
+    val scope = rememberCoroutineScope()
+    val showCopyToast: (String) -> Unit = { label ->
+        scope.launch { snackbarHostState.showSnackbar(label, duration = SnackbarDuration.Short) }
+    }
 
     val imagePickerLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.PickMultipleVisualMedia(maxItems = 4)
@@ -127,6 +132,7 @@ fun ChatScreen(
     }
 
     Scaffold(
+        snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
             TopAppBar(
                 title = { Text(chatTitle, maxLines = 1) },
@@ -276,18 +282,35 @@ fun ChatScreen(
                 contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                items(messages, key = { it.id }) { message ->
+                itemsIndexed(messages, key = { _, m -> m.id }) { index, message ->
+                    val isLastAssistant = message.role == MessageRole.ASSISTANT &&
+                        index == messages.lastIndex
                     MessageBubble(
                         message = message,
-                        onCopy = { viewModel.copyToClipboard(message.content) },
-                        onShare = { viewModel.shareText(message.content) }
+                        canRegenerate = isLastAssistant && !isGenerating,
+                        onCopy = {
+                            viewModel.copyToClipboard(message.content)
+                            showCopyToast("Copied message")
+                        },
+                        onShare = { viewModel.shareText(message.content) },
+                        onCopyCode = { code ->
+                            viewModel.copyToClipboard(code)
+                            showCopyToast("Copied code")
+                        },
+                        onRegenerate = { viewModel.regenerateLastResponse() }
                     )
                 }
 
                 // Streaming response
                 if (streamingContent.isNotBlank()) {
                     item {
-                        StreamingBubble(content = streamingContent)
+                        StreamingBubble(
+                            content = streamingContent,
+                            onCopyCode = { code ->
+                                viewModel.copyToClipboard(code)
+                                showCopyToast("Copied code")
+                            }
+                        )
                     }
                 }
 
@@ -683,8 +706,11 @@ private fun rememberImageBitmap(path: String, maxDim: Int): ImageBitmap? {
 @Composable
 private fun MessageBubble(
     message: Message,
+    canRegenerate: Boolean,
     onCopy: () -> Unit,
-    onShare: () -> Unit
+    onShare: () -> Unit,
+    onCopyCode: (String) -> Unit,
+    onRegenerate: () -> Unit
 ) {
     val isUser = message.role == MessageRole.USER
     Column(
@@ -713,15 +739,18 @@ private fun MessageBubble(
                 }
                 if (message.content.isNotBlank()) {
                     if (isUser) {
-                        Text(
-                            text = message.content,
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onPrimaryContainer
-                        )
+                        SelectionContainer {
+                            Text(
+                                text = message.content,
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onPrimaryContainer
+                            )
+                        }
                     } else {
                         ThinkAwareMarkdown(
                             content = message.content,
-                            isStreaming = false
+                            isStreaming = false,
+                            onCopyCode = onCopyCode
                         )
                     }
                 }
@@ -740,13 +769,18 @@ private fun MessageBubble(
                 IconButton(onClick = onShare, modifier = Modifier.size(28.dp)) {
                     Icon(Icons.Default.Share, "Share", modifier = Modifier.size(14.dp))
                 }
+                if (canRegenerate) {
+                    IconButton(onClick = onRegenerate, modifier = Modifier.size(28.dp)) {
+                        Icon(Icons.Default.Refresh, "Regenerate", modifier = Modifier.size(14.dp))
+                    }
+                }
             }
         }
     }
 }
 
 @Composable
-private fun StreamingBubble(content: String) {
+private fun StreamingBubble(content: String, onCopyCode: (String) -> Unit) {
     Column(
         modifier = Modifier.fillMaxWidth(),
         horizontalAlignment = Alignment.Start
@@ -758,7 +792,7 @@ private fun StreamingBubble(content: String) {
             modifier = Modifier.fillMaxWidth(0.85f)
         ) {
             Column(modifier = Modifier.padding(12.dp)) {
-                ThinkAwareMarkdown(content = content, isStreaming = true)
+                ThinkAwareMarkdown(content = content, isStreaming = true, onCopyCode = onCopyCode)
             }
         }
     }
@@ -771,7 +805,11 @@ private fun StreamingBubble(content: String) {
  * model work; once the message is finalised, thinking collapses by default.
  */
 @Composable
-private fun ThinkAwareMarkdown(content: String, isStreaming: Boolean) {
+private fun ThinkAwareMarkdown(
+    content: String,
+    isStreaming: Boolean,
+    onCopyCode: (String) -> Unit
+) {
     val segments = remember(content) { parseThinkSegments(content) }
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         segments.forEachIndexed { index, seg ->
@@ -783,7 +821,7 @@ private fun ThinkAwareMarkdown(content: String, isStreaming: Boolean) {
                     initiallyExpanded = isStreaming && isLast && !seg.closed
                 )
             } else if (seg.text.isNotBlank()) {
-                RichText { Markdown(content = seg.text) }
+                MarkdownContent(content = seg.text, onCopyCode = onCopyCode)
             }
         }
     }
