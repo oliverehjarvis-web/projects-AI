@@ -51,6 +51,7 @@ interface AppStore {
   setMessages: (chatId: string, m: Message[]) => void;
   removeMessage: (chatId: string, remoteId: string) => void;
   appendToken: (chatId: string, messageId: string, token: string) => void;
+  replaceMessageContent: (chatId: string, messageId: string, content: string) => void;
   addMessage: (chatId: string, m: Message) => void;
   reconcileMessageId: (chatId: string, tmpId: string, real: Message) => void;
   setActiveProject: (id: string | null) => void;
@@ -159,6 +160,15 @@ export const useStore = create<AppStore>((set) => ({
         ...s.messages,
         [chatId]: (s.messages[chatId] ?? []).map((m) =>
           m.remote_id === messageId ? { ...m, content: m.content + token } : m
+        ),
+      },
+    })),
+  replaceMessageContent: (chatId, messageId, content) =>
+    set((s) => ({
+      messages: {
+        ...s.messages,
+        [chatId]: (s.messages[chatId] ?? []).map((m) =>
+          m.remote_id === messageId ? { ...m, content } : m
         ),
       },
     })),

@@ -7,7 +7,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from db import init_db
-from routers import health, inference, server_info, sync, models
+from routers import health, inference, server_info, sync, models, web_search
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +37,7 @@ app.include_router(inference.router)
 app.include_router(server_info.router)
 app.include_router(sync.router)
 app.include_router(models.router)
+app.include_router(web_search.router)
 
 _WEB_DIST = os.path.join(os.path.dirname(__file__), "web", "dist")
 if os.path.isdir(_WEB_DIST):

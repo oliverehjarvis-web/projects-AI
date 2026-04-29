@@ -130,10 +130,11 @@ export default function ProjectDetail() {
   const handleRunQuickAction = async (qa: QuickAction) => {
     if (!projectId) return;
     try {
-      // Create a new chat seeded with the quick action's prompt template as the first user
-      // message — same flow as Android Routes.NEW_CHAT.
       const chat = await createChat(projectId, qa.name);
       addChat(projectId, chat);
+      // Persist the user turn server-side so the message survives a refresh, then route to the
+      // chat. ChatView reads the seeded prompt from location state and auto-fires generation
+      // with applyDefaultPreamble=false — matches Android's NEW_CHAT quickActionId path.
       const now = Date.now();
       await pushMessage({
         chat_remote_id: chat.remote_id,
@@ -143,7 +144,9 @@ export default function ProjectDetail() {
         created_at: now,
         deleted_at: null,
       });
-      nav(`/projects/${projectId}/chats/${chat.remote_id}`);
+      nav(`/projects/${projectId}/chats/${chat.remote_id}`, {
+        state: { quickActionPrompt: qa.prompt_template },
+      });
     } catch (e) {
       pushSnack(`Run failed: ${e}`, { tone: "error" });
     }

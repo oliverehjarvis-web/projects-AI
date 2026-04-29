@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, useCallback } from "react";
-import { useParams, useNavigate } from "react-router-dom";
+import { useParams, useNavigate, useLocation } from "react-router-dom";
 import { useStore } from "../store/useStore";
 import {
   fetchMessages,
@@ -8,6 +8,10 @@ import {
   deleteMessage,
 } from "../api/sync";
 import { streamGenerate } from "../api/inference";
+import {
+  searxngSearch, fetchPage, AUTO_FETCH_INSTRUCTIONS, SEARCH_TAG_RE,
+  formatResultsForPrompt, stripToolTags,
+} from "../api/webSearch";
 import MessageBubble from "./MessageBubble";
 import RepoBrowser from "./RepoBrowser";
 import IconButton from "../ui/IconButton";
@@ -83,6 +87,8 @@ const styles: Record<string, React.CSSProperties> = {
 export default function ChatView() {
   const { projectId, chatId } = useParams<{ projectId: string; chatId: string }>();
   const nav = useNavigate();
+  const location = useLocation();
+  const seedFromQuickAction = (location.state as { quickActionPrompt?: string } | null)?.quickActionPrompt;
   const {
     projects, chats, messages, setMessages, addMessage, appendToken, reconcileMessageId,
     removeMessage, model, globalContext, searxngUrl,
@@ -91,11 +97,13 @@ export default function ChatView() {
   const project = projects.find((p) => p.remote_id === projectId);
   const chat = chats[projectId ?? ""]?.find((c) => c.remote_id === chatId);
   const msgList = chatId ? (messages[chatId] ?? []) : [];
+  const replaceMessageContent = useStore((s) => s.replaceMessageContent);
   const [input, setInput] = useState("");
   const [streaming, setStreaming] = useState(false);
   const [thinkingSince, setThinkingSince] = useState<number | null>(null);
   const [thinkingElapsed, setThinkingElapsed] = useState(0);
   const [streamError, setStreamError] = useState<string | null>(null);
+  const [searchStatus, setSearchStatus] = useState<string | null>(null);
   const [showJumpButton, setShowJumpButton] = useState(false);
   const [showRepoBrowser, setShowRepoBrowser] = useState(false);
   const messagesRef = useRef<HTMLDivElement>(null);
@@ -118,6 +126,21 @@ export default function ChatView() {
     fetchMessages(chatId).then((m) => setMessages(chatId, m)).catch(console.error);
   }, [chatId, setMessages]);
 
+  // Quick action seeded chat: when ProjectDetail navigates here with a quickActionPrompt in
+  // route state, send it as the first user turn and skip the reasoning preamble (matches
+  // Android's NEW_CHAT route behaviour for quick actions). Guard with a ref so the auto-send
+  // only fires once per mount even if the route state survives a re-render.
+  const autoSentRef = useRef(false);
+  useEffect(() => {
+    if (!chatId || !seedFromQuickAction || autoSentRef.current || streaming) return;
+    if (msgList.length === 0) return; // wait until fetchMessages resolves
+    autoSentRef.current = true;
+    // Clear the route state so a subsequent refresh of this URL doesn't re-fire.
+    nav(location.pathname, { replace: true, state: {} });
+    startGenerationFromHistory(msgList, { applyDefaultPreamble: false });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [chatId, seedFromQuickAction, msgList.length]);
+
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [msgList.length]);
@@ -136,7 +159,7 @@ export default function ChatView() {
     return () => el.removeEventListener("scroll", onScroll);
   }, []);
 
-  const buildSystemPrompt = useCallback((): string => {
+  const buildSystemPrompt = useCallback((opts?: { withSearchInstructions?: boolean }): string => {
     const parts: string[] = [];
     if (project?.manual_context.trim()) {
       parts.push(`<project_context>\n${project.manual_context}\n</project_context>`);
@@ -152,10 +175,14 @@ export default function ChatView() {
         `<repo_context owner="${stagedFiles.owner}" repo="${stagedFiles.repo}" ref="${stagedFiles.ref}">\n${body}\n</repo_context>`,
       );
     }
+    if (opts?.withSearchInstructions) parts.push(AUTO_FETCH_INSTRUCTIONS);
     return parts.join("\n\n");
   }, [project, stagedFiles]);
 
-  const startGenerationFromHistory = useCallback(async (history: Message[]) => {
+  const startGenerationFromHistory = useCallback(async (
+    history: Message[],
+    opts?: { applyDefaultPreamble?: boolean },
+  ) => {
     if (!chatId) return;
     setStreaming(true);
     setStreamError(null);
@@ -176,24 +203,102 @@ export default function ChatView() {
     addMessage(chatId, assistantMsg);
 
     abortRef.current = new AbortController();
-    const systemPrompt = buildSystemPrompt();
+    const useSearch = !!chat?.web_search_enabled;
+    const baseSystem = buildSystemPrompt({ withSearchInstructions: useSearch });
+    const baseConfig = {
+      model,
+      userName: globalContext.user_name,
+      globalRules: globalContext.rules,
+      numCtx: project?.context_length,
+      applyDefaultPreamble: opts?.applyDefaultPreamble,
+    };
+
     try {
+      // Round 1 — accumulate to a local buffer and mirror tool-stripped text into the bubble
+      // so a streaming `<search>` tag never flashes onscreen.
+      const buf: { value: string } = { value: "" };
       await streamGenerate(
-        {
-          systemPrompt,
-          messages: history,
-          model,
-          userName: globalContext.user_name,
-          globalRules: globalContext.rules,
-          numCtx: project?.context_length,
-        },
+        { ...baseConfig, systemPrompt: baseSystem, messages: history },
         (token) => {
           setThinkingSince(null);
-          appendToken(chatId, streamingId, token);
+          buf.value += token;
+          replaceMessageContent(chatId, streamingId, stripToolTags(buf.value));
         },
-        () => { setStreaming(false); setThinkingSince(null); },
+        () => { /* ignore — handled below */ },
         abortRef.current.signal,
       );
+
+      const searchMatch = useSearch ? SEARCH_TAG_RE.exec(buf.value) : null;
+
+      if (!searchMatch) {
+        // No tool call. Whatever came back is the final answer.
+        replaceMessageContent(chatId, streamingId, buf.value);
+      } else {
+        // Round 2 — run the search, fetch top pages, then re-stream a final answer into the
+        // same bubble. Mirrors GenerationController.runAutoFetch on Android so behaviour is
+        // identical across surfaces.
+        const query = searchMatch[1].trim();
+        replaceMessageContent(chatId, streamingId, "");
+        setSearchStatus(`Searching: ${query}`);
+        let enriched = "";
+        try {
+          if (!searxngUrl.trim()) throw new Error("SearXNG URL not set in Settings → AI tools.");
+          const results = await searxngSearch(searxngUrl, query, 5);
+          enriched = formatResultsForPrompt(query, results);
+          for (let i = 0; i < Math.min(2, results.length); i++) {
+            setSearchStatus(`Reading: ${results[i].title.slice(0, 40)}`);
+            try {
+              const text = await fetchPage(results[i].url, 2000);
+              if (text) {
+                enriched += `\n\n--- Page [${i + 1}] ${results[i].title} (${results[i].url}) ---\n${text}`;
+              }
+            } catch { /* skip individual page failures */ }
+          }
+        } catch (e) {
+          const msg = `Search failed: ${(e as Error).message}`;
+          replaceMessageContent(chatId, streamingId, msg);
+          setSearchStatus(null);
+          setStreaming(false);
+          return;
+        }
+        setSearchStatus(null);
+
+        const continuation: Message[] = [
+          ...history,
+          {
+            remote_id: `tmp-asst-search-${Date.now()}`,
+            chat_remote_id: chatId,
+            role: "assistant",
+            content: `<search>${query}</search>`,
+            token_count: 0,
+            created_at: Date.now(),
+            deleted_at: null,
+          },
+          {
+            remote_id: `tmp-user-search-${Date.now()}`,
+            chat_remote_id: chatId,
+            role: "user",
+            content: `${enriched}\n\nUse these to answer my previous question. Do not call <search> again.`,
+            token_count: 0,
+            created_at: Date.now() + 1,
+            deleted_at: null,
+          },
+        ];
+        await streamGenerate(
+          { ...baseConfig, systemPrompt: baseSystem, messages: continuation, applyDefaultPreamble: false },
+          (token) => {
+            // Stream the second round into the bubble directly — no tool tags expected here.
+            appendToken(chatId, streamingId, token);
+          },
+          () => {},
+          abortRef.current.signal,
+        );
+      }
+
+      setStreaming(false);
+      setThinkingSince(null);
+
+      // Persist the assistant turn so it survives a refresh and syncs to the phone.
       const streamed = useStore.getState().messages[chatId]?.find((m) => m.remote_id === streamingId);
       if (streamed && streamed.content.trim()) {
         const { remote_id: _aid, ...asstWithoutId } = streamed;
@@ -201,17 +306,17 @@ export default function ChatView() {
           .then((realId) => reconcileMessageId(chatId, streamingId, { ...streamed, remote_id: realId }))
           .catch(console.error);
       }
-      // Repo files attach to one turn only — clear after the streaming completes
-      // (success or error) so the next message doesn't re-include them.
+      // Repo files attach to one turn only.
       if (stagedFiles && chatId) clearStagedRepoFiles(chatId);
     } catch (e) {
       setStreaming(false);
       setThinkingSince(null);
+      setSearchStatus(null);
       const msg = e instanceof Error ? e.message : String(e);
       if (!/abort/i.test(msg)) setStreamError(msg);
     }
-  }, [chatId, buildSystemPrompt, model, globalContext, project, addMessage, appendToken,
-      reconcileMessageId, stagedFiles, clearStagedRepoFiles]);
+  }, [chatId, chat, buildSystemPrompt, model, globalContext, project, addMessage, appendToken,
+      replaceMessageContent, reconcileMessageId, stagedFiles, clearStagedRepoFiles, searxngUrl]);
 
   const send = useCallback(async () => {
     if (!input.trim() || !chatId || !projectId || streaming) return;
@@ -340,6 +445,11 @@ export default function ChatView() {
               : thinkingElapsed < 20
                 ? `Processing prompt… ${thinkingElapsed}s`
                 : `Still working… ${thinkingElapsed}s (large prompts can take a few minutes on CPU)`}
+          </div>
+        )}
+        {searchStatus && (
+          <div style={{ color: palette.primary, fontSize: 13, padding: "4px 4px", fontStyle: "italic" }}>
+            🌐 {searchStatus}
           </div>
         )}
         {streamError && (
