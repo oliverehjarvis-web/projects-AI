@@ -72,6 +72,7 @@ fun ChatScreen(
     val transcribedText by viewModel.transcribedText.collectAsStateWithLifecycle()
     val webSearchEnabled by viewModel.webSearchEnabled.collectAsStateWithLifecycle()
     val searchStatus by viewModel.searchStatus.collectAsStateWithLifecycle()
+    val toggleWarning by viewModel.toggleWarning.collectAsStateWithLifecycle()
 
     val systemContext by viewModel.systemContext.collectAsStateWithLifecycle()
     val stagedRepoFiles by viewModel.stagedRepoFiles.collectAsStateWithLifecycle()
@@ -110,6 +111,13 @@ fun ChatScreen(
                 context, Manifest.permission.POST_NOTIFICATIONS
             ) == PackageManager.PERMISSION_GRANTED
             if (!granted) notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
+    }
+
+    LaunchedEffect(toggleWarning) {
+        toggleWarning?.let {
+            scope.launch { snackbarHostState.showSnackbar(it, duration = SnackbarDuration.Long) }
+            viewModel.consumeToggleWarning()
         }
     }
 

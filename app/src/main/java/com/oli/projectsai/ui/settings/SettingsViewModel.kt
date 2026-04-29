@@ -17,7 +17,6 @@ import com.oli.projectsai.data.sync.SyncRepository
 import com.oli.projectsai.data.sync.SyncResult
 import com.oli.projectsai.data.update.UpdateChecker
 import com.oli.projectsai.data.update.UpdateInfo
-import com.oli.projectsai.inference.InferenceBackend
 import com.oli.projectsai.inference.InferenceManager
 import com.oli.projectsai.inference.ModelState
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -81,10 +80,6 @@ class SettingsViewModel @Inject constructor(
     }
 
     val modelState: StateFlow<ModelState> = inferenceManager.modelState
-
-    val backends: StateFlow<List<InferenceBackend>> = MutableStateFlow(
-        inferenceManager.getAvailableBackends()
-    )
 
     val searxngUrl: StateFlow<String> = searchSettings.searxngUrl.stateIn(
         viewModelScope, SharingStarted.Eagerly, ""

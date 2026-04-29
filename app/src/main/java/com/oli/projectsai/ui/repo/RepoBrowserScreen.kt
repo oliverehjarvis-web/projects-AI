@@ -102,6 +102,7 @@ fun RepoBrowserScreen(
             when (val s = phase) {
                 is RepoBrowserViewModel.Phase.PickRepo -> RepoListContent(repos, viewModel::pickRepo)
                 is RepoBrowserViewModel.Phase.Loading -> LoadingContent(s.label)
+                is RepoBrowserViewModel.Phase.NeedsSetup -> NeedsSetupContent(onNavigateBack)
                 is RepoBrowserViewModel.Phase.Error -> ErrorContent(s.message, viewModel::loadRepoList)
                 is RepoBrowserViewModel.Phase.Tree -> TreeContent(
                     rootNode = s.rootNode,
@@ -151,6 +152,36 @@ private fun LoadingContent(label: String) {
         Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp)) {
             CircularProgressIndicator()
             Text(label, style = MaterialTheme.typography.bodyMedium)
+        }
+    }
+}
+
+@Composable
+private fun NeedsSetupContent(onBack: () -> Unit) {
+    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+            modifier = Modifier.padding(24.dp)
+        ) {
+            Icon(
+                Icons.AutoMirrored.Filled.Article,
+                contentDescription = null,
+                modifier = Modifier.size(48.dp),
+                tint = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Text(
+                "GitHub isn't set up yet",
+                style = MaterialTheme.typography.titleMedium
+            )
+            Text(
+                "Add a Personal Access Token in Settings → GitHub to browse your repos and " +
+                    "inject files into chat. Fine-grained PATs work best — pick read access to " +
+                    "the repos you want the assistant to see.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            OutlinedButton(onClick = onBack) { Text("Back") }
         }
     }
 }

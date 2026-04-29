@@ -1,18 +1,22 @@
 package com.oli.projectsai.ui.project
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.WarningAmber
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import kotlinx.coroutines.delay
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -143,83 +147,23 @@ fun ProjectEditScreen(
 
             HorizontalDivider()
 
-            OutlinedTextField(
-                value = memoryTokenLimit.toString(),
-                onValueChange = { it.toIntOrNull()?.let { v -> viewModel.updateMemoryTokenLimit(v) } },
-                label = { Text("Memory token limit") },
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth()
-            )
-
-            HorizontalDivider()
-
             val autoContextHint by viewModel.autoContextHint.collectAsStateWithLifecycle()
             val isComputingAutoContext by viewModel.isComputingAutoContext.collectAsStateWithLifecycle()
 
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = androidx.compose.ui.Alignment.CenterVertically
-            ) {
-                Text(
-                    "Context length",
-                    style = MaterialTheme.typography.titleSmall,
-                    modifier = Modifier.weight(1f)
-                )
-                TextButton(
-                    onClick = { viewModel.autoFillContextLength() },
-                    enabled = !isComputingAutoContext
-                ) {
-                    if (isComputingAutoContext) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(14.dp),
-                            strokeWidth = 2.dp
-                        )
-                        Spacer(Modifier.width(6.dp))
-                    }
-                    Text("Auto")
-                }
-            }
-            Text(
-                "Larger context lets the model remember more of a conversation but slows generation. " +
-                    "Changing this reloads the model when you next open a chat in this project.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
+            ContextBudgetSection(
+                contextLength = contextLength,
+                contextOptions = contextOptions,
+                memoryTokenLimit = memoryTokenLimit,
+                manualContextTokens = contextTokenCount,
+                autoContextHint = autoContextHint,
+                isComputingAutoContext = isComputingAutoContext,
+                onContextLengthChange = { viewModel.updateContextLength(it) },
+                onMemoryTokenLimitChange = { viewModel.updateMemoryTokenLimit(it) },
+                onAutoFill = { viewModel.autoFillContextLength() }
             )
-
-            val selectedIdx = contextOptions.indexOf(contextLength).let { if (it < 0) 2 else it }
-            Slider(
-                value = selectedIdx.toFloat(),
-                onValueChange = { v ->
-                    viewModel.updateContextLength(contextOptions[v.toInt().coerceIn(0, contextOptions.lastIndex)])
-                },
-                valueRange = 0f..(contextOptions.lastIndex).toFloat(),
-                steps = contextOptions.size - 2,
-                modifier = Modifier.fillMaxWidth()
-            )
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                contextOptions.forEach { v ->
-                    val label = if (v >= 1024) "${v / 1024}K" else v.toString()
-                    Text(
-                        label,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = if (v == contextLength)
-                            MaterialTheme.colorScheme.primary
-                        else MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-            }
-            autoContextHint?.let { hint ->
-                Text(
-                    hint,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
 
             HorizontalDivider()
+            val isRemoteConfigured by viewModel.isRemoteConfigured.collectAsStateWithLifecycle()
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -237,6 +181,33 @@ fun ProjectEditScreen(
                     checked = useRemoteBackend,
                     onCheckedChange = { viewModel.updateUseRemoteBackend(it) }
                 )
+            }
+            if (useRemoteBackend && !isRemoteConfigured) {
+                Card(
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.errorContainer
+                    ),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(
+                        modifier = Modifier.padding(12.dp),
+                        verticalAlignment = androidx.compose.ui.Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            Icons.Default.WarningAmber,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onErrorContainer
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            "Remote server isn't configured yet. Add your server URL and API token " +
+                                "in Settings → Remote server, otherwise this project will fall back " +
+                                "to the on-device model.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onErrorContainer
+                        )
+                    }
+                }
             }
 
             if (canTogglePrivate) {
@@ -261,5 +232,170 @@ fun ProjectEditScreen(
                 }
             }
         }
+    }
+}
+
+/**
+ * "Context budget" section: one slider for the model's context window, a stacked bar that shows
+ * how memory + manual context eat into it, and a memory-cap slider clamped to leave 2k for
+ * the live conversation. Replaces the old "Memory token limit" text field that lived in
+ * isolation from the context picker.
+ */
+@Composable
+private fun ContextBudgetSection(
+    contextLength: Int,
+    contextOptions: List<Int>,
+    memoryTokenLimit: Int,
+    manualContextTokens: Int,
+    autoContextHint: String?,
+    isComputingAutoContext: Boolean,
+    onContextLengthChange: (Int) -> Unit,
+    onMemoryTokenLimitChange: (Int) -> Unit,
+    onAutoFill: () -> Unit
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = androidx.compose.ui.Alignment.CenterVertically
+    ) {
+        Text(
+            "Context budget",
+            style = MaterialTheme.typography.titleSmall,
+            modifier = Modifier.weight(1f)
+        )
+        TextButton(onClick = onAutoFill, enabled = !isComputingAutoContext) {
+            if (isComputingAutoContext) {
+                CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 2.dp)
+                Spacer(Modifier.width(6.dp))
+            }
+            Text("Auto")
+        }
+    }
+    Text(
+        "Memory and manual context share this window with the live conversation. Larger values " +
+            "remember more but slow generation, and reload the model on next chat open.",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant
+    )
+
+    // Stacked allocation bar: memory + manual context filling the chosen window. The live
+    // conversation gets whatever's left.
+    val total = contextLength.coerceAtLeast(1)
+    val memShare = (memoryTokenLimit.toFloat() / total).coerceIn(0f, 1f)
+    val manualShare = (manualContextTokens.toFloat() / total).coerceIn(0f, 1f - memShare)
+    val freeShare = (1f - memShare - manualShare).coerceAtLeast(0f)
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(10.dp)
+            .clip(RoundedCornerShape(5.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant)
+    ) {
+        if (memShare > 0f) {
+            Box(
+                modifier = Modifier
+                    .weight(memShare)
+                    .fillMaxHeight()
+                    .background(MaterialTheme.colorScheme.tertiary)
+            )
+        }
+        if (manualShare > 0f) {
+            Box(
+                modifier = Modifier
+                    .weight(manualShare)
+                    .fillMaxHeight()
+                    .background(MaterialTheme.colorScheme.secondary)
+            )
+        }
+        if (freeShare > 0f) {
+            Box(
+                modifier = Modifier
+                    .weight(freeShare)
+                    .fillMaxHeight()
+                    .background(Color.Transparent)
+            )
+        }
+    }
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween
+    ) {
+        BudgetLegend("Memory ${memoryTokenLimit / 1000}k", MaterialTheme.colorScheme.tertiary)
+        BudgetLegend("Context ${manualContextTokens / 1000}k", MaterialTheme.colorScheme.secondary)
+        Text(
+            "Free ≈${((freeShare * total) / 1000).toInt()}k",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+    }
+
+    Spacer(Modifier.height(4.dp))
+    Text(
+        "Window: ${contextLength / 1024}k tokens",
+        style = MaterialTheme.typography.labelMedium
+    )
+    val selectedIdx = contextOptions.indexOf(contextLength).let { if (it < 0) 2 else it }
+    Slider(
+        value = selectedIdx.toFloat(),
+        onValueChange = { v ->
+            onContextLengthChange(contextOptions[v.toInt().coerceIn(0, contextOptions.lastIndex)])
+        },
+        valueRange = 0f..(contextOptions.lastIndex).toFloat(),
+        steps = contextOptions.size - 2,
+        modifier = Modifier.fillMaxWidth()
+    )
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween
+    ) {
+        contextOptions.forEach { v ->
+            val label = if (v >= 1024) "${v / 1024}K" else v.toString()
+            Text(
+                label,
+                style = MaterialTheme.typography.labelSmall,
+                color = if (v == contextLength) MaterialTheme.colorScheme.primary
+                else MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    }
+    autoContextHint?.let { hint ->
+        Text(hint, style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+
+    Spacer(Modifier.height(8.dp))
+    Text(
+        "Memory cap: ${memoryTokenLimit / 1000}k tokens",
+        style = MaterialTheme.typography.labelMedium
+    )
+    val memoryCeiling = (contextLength - 2000).coerceAtLeast(1000)
+    Slider(
+        value = memoryTokenLimit.toFloat(),
+        onValueChange = { onMemoryTokenLimitChange(it.toInt()) },
+        valueRange = 1000f..memoryCeiling.toFloat(),
+        modifier = Modifier.fillMaxWidth()
+    )
+    Text(
+        "Memory is capped at the window minus 2k so replies always have room. Increase the " +
+            "window above first if you want a bigger memory.",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant
+    )
+}
+
+@Composable
+private fun BudgetLegend(label: String, dotColor: Color) {
+    Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+        Box(
+            modifier = Modifier
+                .size(8.dp)
+                .clip(RoundedCornerShape(4.dp))
+                .background(dotColor)
+        )
+        Spacer(Modifier.width(4.dp))
+        Text(
+            label,
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
     }
 }

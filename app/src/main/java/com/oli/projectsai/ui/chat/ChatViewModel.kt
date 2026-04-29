@@ -17,6 +17,7 @@ import com.oli.projectsai.data.db.entity.Message
 import com.oli.projectsai.data.db.entity.MessageRole
 import com.oli.projectsai.data.github.RepoSelectionStore
 import com.oli.projectsai.data.preferences.GlobalContextStore
+import com.oli.projectsai.data.preferences.SearchSettings
 import com.oli.projectsai.data.repository.ChatRepository
 import com.oli.projectsai.data.repository.ProjectRepository
 import com.oli.projectsai.inference.ChatError
@@ -55,6 +56,7 @@ class ChatViewModel @Inject constructor(
     private val attachmentStore: AttachmentStore,
     private val generationController: GenerationController,
     private val repoSelectionStore: RepoSelectionStore,
+    private val searchSettings: SearchSettings,
     @ApplicationContext private val appContext: Context
 ) : ViewModel() {
 
@@ -134,6 +136,14 @@ class ChatViewModel @Inject constructor(
 
     private val _webSearchEnabled = MutableStateFlow(false)
     val webSearchEnabled: StateFlow<Boolean> = _webSearchEnabled.asStateFlow()
+
+    /**
+     * One-shot snackbar message — currently only fires when the user enables web search on a
+     * chat where no SearXNG endpoint is configured, so the toggle wouldn't actually do anything.
+     */
+    private val _toggleWarning = MutableStateFlow<String?>(null)
+    val toggleWarning: StateFlow<String?> = _toggleWarning.asStateFlow()
+    fun consumeToggleWarning() { _toggleWarning.value = null }
 
     init {
         viewModelScope.launch {
@@ -368,6 +378,10 @@ class ChatViewModel @Inject constructor(
         _webSearchEnabled.value = next
         viewModelScope.launch {
             runCatching { chatRepository.updateWebSearchEnabled(activeChatId, next) }
+            if (next && searchSettings.searxngUrl.first().isBlank()) {
+                _toggleWarning.value =
+                    "Web search is on but no SearXNG instance is configured. Add one in Settings → Web search."
+            }
         }
     }
 

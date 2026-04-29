@@ -4,6 +4,7 @@ import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.oli.projectsai.data.db.entity.Project
+import com.oli.projectsai.data.preferences.RemoteSettings
 import com.oli.projectsai.data.privacy.PrivacySession
 import com.oli.projectsai.data.repository.ProjectRepository
 import com.oli.projectsai.inference.ChatMessage
@@ -16,9 +17,13 @@ import com.oli.projectsai.inference.ModelState
 import com.oli.projectsai.inference.SummarisationPrompts
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.launchIn
+import kotlinx.coroutines.flow.onEach
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
@@ -28,8 +33,19 @@ class ProjectEditViewModel @Inject constructor(
     private val projectRepository: ProjectRepository,
     private val inferenceManager: InferenceManager,
     private val contextSizing: ContextSizing,
+    remoteSettings: RemoteSettings,
     privacySession: PrivacySession
 ) : ViewModel() {
+
+    /**
+     * True when both server URL and API token are set, so flipping the per-project remote-backend
+     * switch is meaningful. The screen warns when this is false to avoid the silent fall-back to
+     * local that used to confuse the user.
+     */
+    val isRemoteConfigured: StateFlow<Boolean> = combine(
+        remoteSettings.serverUrl, remoteSettings.apiToken
+    ) { url, token -> url.isNotBlank() && token.isNotBlank() }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, false)
 
     val canTogglePrivate: StateFlow<Boolean> = privacySession.isUnlocked
 
@@ -110,11 +126,19 @@ class ProjectEditViewModel @Inject constructor(
     }
 
     fun updateMemoryTokenLimit(value: Int) {
-        _memoryTokenLimit.value = value.coerceIn(1000, 32000)
+        // Cap memory to context window minus a 2k floor for the actual conversation, so the
+        // user can't lock themselves out of replies by giving the entire window to memory.
+        val ceiling = (_contextLength.value - 2000).coerceAtLeast(1000)
+        _memoryTokenLimit.value = value.coerceIn(1000, ceiling)
     }
 
     fun updateContextLength(value: Int) {
-        if (value in contextLengthOptions) _contextLength.value = value
+        if (value in contextLengthOptions) {
+            _contextLength.value = value
+            // Re-clamp memory if it now exceeds the new context (leaves a 2k floor for replies).
+            val ceiling = (value - 2000).coerceAtLeast(1000)
+            if (_memoryTokenLimit.value > ceiling) _memoryTokenLimit.value = ceiling
+        }
         _autoContextHint.value = null
     }
 
@@ -190,6 +214,9 @@ class ProjectEditViewModel @Inject constructor(
 
     fun updateUseRemoteBackend(value: Boolean) {
         _useRemoteBackend.value = value
+        // Auto recommendation is backend-specific (RAM is different on phone vs NAS), so the
+        // hint goes stale the moment the user flips this. Drop it; they can re-tap Auto.
+        _autoContextHint.value = null
     }
 
     fun save() {

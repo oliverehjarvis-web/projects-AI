@@ -32,7 +32,6 @@ fun SettingsScreen(
     var aboutTapCount by remember { mutableStateOf(0) }
     val privateRevealed = aboutTapCount >= REVEAL_TAPS
     val modelState by viewModel.modelState.collectAsStateWithLifecycle()
-    val backends by viewModel.backends.collectAsStateWithLifecycle()
     val updateState by viewModel.updateState.collectAsStateWithLifecycle()
     val searxngUrl by viewModel.searxngUrl.collectAsStateWithLifecycle()
     val searchDepth by viewModel.searchDepth.collectAsStateWithLifecycle()
@@ -113,9 +112,22 @@ fun SettingsScreen(
             HorizontalDivider()
 
             Text(
-                "Web search",
+                "AI tools",
                 style = MaterialTheme.typography.titleSmall,
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)
+            )
+            Text(
+                "Optional capabilities the assistant can reach for during a chat.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(horizontal = 16.dp)
+            )
+
+            Spacer(Modifier.height(8.dp))
+            Text(
+                "Web search",
+                style = MaterialTheme.typography.labelLarge,
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
             )
 
             SearxngUrlField(
@@ -128,7 +140,19 @@ fun SettingsScreen(
                 onSelect = { viewModel.setSearchDepth(it) }
             )
 
-            HorizontalDivider()
+            // GitHub — drives the in-chat repo browser, lives alongside Web search.
+            val githubPat by viewModel.githubPat.collectAsStateWithLifecycle()
+            val githubDefaultRepo by viewModel.githubDefaultRepo.collectAsStateWithLifecycle()
+            val githubTestState by viewModel.githubTestState.collectAsStateWithLifecycle()
+            GitHubSection(
+                pat = githubPat,
+                defaultRepo = githubDefaultRepo,
+                testState = githubTestState,
+                onPatChange = { viewModel.setGithubPat(it) },
+                onDefaultRepoChange = { viewModel.setGithubDefaultRepo(it) },
+                onTestConnection = { viewModel.testGithubConnection() },
+                onDismissTestState = { viewModel.dismissGithubTestState() }
+            )
 
             HorizontalDivider()
 
@@ -172,58 +196,6 @@ fun SettingsScreen(
                 onRefresh = { viewModel.refreshVoiceModelOptions() },
                 onOpenModelManagement = onModelManagement
             )
-
-            HorizontalDivider()
-
-            // GitHub section — drives the in-chat repo browser.
-            val githubPat by viewModel.githubPat.collectAsStateWithLifecycle()
-            val githubDefaultRepo by viewModel.githubDefaultRepo.collectAsStateWithLifecycle()
-            val githubTestState by viewModel.githubTestState.collectAsStateWithLifecycle()
-            GitHubSection(
-                pat = githubPat,
-                defaultRepo = githubDefaultRepo,
-                testState = githubTestState,
-                onPatChange = { viewModel.setGithubPat(it) },
-                onDefaultRepoChange = { viewModel.setGithubDefaultRepo(it) },
-                onTestConnection = { viewModel.testGithubConnection() },
-                onDismissTestState = { viewModel.dismissGithubTestState() }
-            )
-
-            HorizontalDivider()
-
-            // Backends section
-            Text(
-                "Backends",
-                style = MaterialTheme.typography.titleSmall,
-                modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)
-            )
-
-            backends.forEach { backend ->
-                ListItem(
-                    headlineContent = { Text(backend.displayName) },
-                    supportingContent = {
-                        Text(
-                            when {
-                                backend.isLoaded -> "Active"
-                                backend.isAvailable -> "Available"
-                                else -> "Unavailable"
-                            }
-                        )
-                    },
-                    leadingContent = {
-                        Icon(
-                            if (backend.id.contains("local")) Icons.Default.PhoneAndroid
-                            else Icons.Default.Cloud,
-                            null
-                        )
-                    },
-                    trailingContent = {
-                        if (backend.isLoaded) {
-                            Icon(Icons.Default.CheckCircle, null, tint = MaterialTheme.colorScheme.primary)
-                        }
-                    }
-                )
-            }
 
             HorizontalDivider()
 

@@ -33,6 +33,8 @@ class RepoBrowserViewModel @Inject constructor(
             val truncated: Boolean
         ) : Phase()
         data class Error(val message: String) : Phase()
+        /** No GitHub PAT configured yet — direct the user to Settings. */
+        data object NeedsSetup : Phase()
     }
 
     /**
@@ -82,6 +84,10 @@ class RepoBrowserViewModel @Inject constructor(
 
     fun loadRepoList() {
         viewModelScope.launch {
+            if (settings.pat.first().isBlank()) {
+                _phase.value = Phase.NeedsSetup
+                return@launch
+            }
             _phase.value = Phase.Loading("Loading repositories…")
             try {
                 val list = client.listRepos()
