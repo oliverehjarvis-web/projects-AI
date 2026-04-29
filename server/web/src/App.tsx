@@ -3,6 +3,7 @@ import Layout from "./components/Layout";
 import ProjectList from "./components/ProjectList";
 import ProjectDetail from "./components/ProjectDetail";
 import ChatView from "./components/ChatView";
+import MemoryScreen from "./components/MemoryScreen";
 import Settings from "./components/Settings";
 
 export default function App() {
@@ -13,6 +14,7 @@ export default function App() {
           <Route path="/" element={<Navigate to="/projects" replace />} />
           <Route path="/projects" element={<ProjectList />} />
           <Route path="/projects/:projectId" element={<ProjectDetail />} />
+          <Route path="/projects/:projectId/memory" element={<MemoryScreen />} />
           <Route path="/projects/:projectId/chats/:chatId" element={<ChatView />} />
           <Route path="/settings" element={<Settings />} />
         </Routes>

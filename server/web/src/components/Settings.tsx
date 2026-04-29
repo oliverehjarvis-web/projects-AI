@@ -4,93 +4,48 @@ import { useStore } from "../store/useStore";
 import { checkHealth } from "../api/sync";
 import { fetchModels, pullModel, deleteModel, type CatalogueModel } from "../api/models";
 import { fetchGlobalContext, saveGlobalContext } from "../api/global";
-
-const s: Record<string, React.CSSProperties> = {
-  page: { padding: 24, maxWidth: 560, overflowY: "auto", flex: 1 },
-  title: { fontSize: 22, fontWeight: 700, marginBottom: 24, color: "#fff" },
-  section: { marginBottom: 28 },
-  sectionTitle: { fontSize: 13, fontWeight: 600, color: "#888", textTransform: "uppercase", letterSpacing: 1, marginBottom: 12 },
-  label: { display: "block", fontSize: 13, color: "#888", marginBottom: 6 },
-  input: {
-    width: "100%", background: "#1a1a1a", border: "1px solid #2a2a2a", borderRadius: 8,
-    color: "#e0e0e0", padding: "10px 12px", fontSize: 14, outline: "none", marginBottom: 16,
-    boxSizing: "border-box" as const,
-  },
-  select: {
-    width: "100%", background: "#1a1a1a", border: "1px solid #2a2a2a", borderRadius: 8,
-    color: "#e0e0e0", padding: "10px 12px", fontSize: 14, outline: "none", marginBottom: 16,
-    appearance: "none" as const, cursor: "pointer",
-  },
-  btn: {
-    background: "#2563eb", color: "#fff", border: "none", borderRadius: 8,
-    padding: "10px 18px", cursor: "pointer", fontWeight: 600, fontSize: 14, marginRight: 8,
-  },
-  btnSm: {
-    background: "#2563eb", color: "#fff", border: "none", borderRadius: 6,
-    padding: "6px 12px", cursor: "pointer", fontWeight: 600, fontSize: 12,
-  },
-  btnDanger: { background: "#7f1d1d" },
-  btnGhost: { background: "transparent", border: "1px solid #2a2a2a", color: "#888" },
-  status: { marginTop: 8, fontSize: 13, color: "#4caf50" },
-  statusErr: { color: "#f44336" },
-  card: {
-    background: "#1a1a1a", border: "1px solid #2a2a2a", borderRadius: 10,
-    padding: "12px 14px", marginBottom: 8,
-  },
-  cardInstalled: { borderColor: "#1d4ed8" },
-  cardRow: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 },
-  modelLabel: { fontWeight: 600, fontSize: 14, color: "#fff" },
-  modelMeta: { fontSize: 12, color: "#888", marginTop: 2 },
-  badge: {
-    fontSize: 11, fontWeight: 600, padding: "2px 7px", borderRadius: 99,
-    background: "#1d4ed8", color: "#93c5fd",
-  },
-  progressBar: {
-    height: 4, background: "#2a2a2a", borderRadius: 2, marginTop: 8, overflow: "hidden",
-  },
-  progressFill: { height: "100%", background: "#2563eb", transition: "width 0.3s" },
-  familyHeader: { fontSize: 12, fontWeight: 600, color: "#555", marginTop: 16, marginBottom: 6 },
-};
+import { whoami as ghWhoami } from "../api/github";
+import Button from "../ui/Button";
+import Card from "../ui/Card";
+import Section from "../ui/Section";
+import { Label, Hint, TextInput, TextArea, Select } from "../ui/Field";
+import { palette, radius, font } from "../theme";
 
 interface PullState { status: string; pct: number | null; error?: string }
 
 export default function Settings() {
-  const { model, setModel, globalContext, setGlobalContext } = useStore();
+  const {
+    model, setModel, globalContext, setGlobalContext, pushSnack,
+    searxngUrl, setSearxngUrl,
+    githubPat, setGithubPat, githubDefaultRepo, setGithubDefaultRepo,
+  } = useStore();
   const [url, setUrl] = useState(getBaseUrl());
   const [token, setTokenState] = useState(getToken());
   const [connStatus, setConnStatus] = useState<{ ok: boolean; msg: string } | null>(null);
   const [catalogue, setCatalogue] = useState<CatalogueModel[]>([]);
   const [pulling, setPulling] = useState<Record<string, PullState>>({});
   const [loadingModels, setLoadingModels] = useState(false);
+
   const [gcDraft, setGcDraft] = useState({ user_name: globalContext.user_name, rules: globalContext.rules });
   const [gcSaving, setGcSaving] = useState(false);
-  const [gcStatus, setGcStatus] = useState<string | null>(null);
+
+  const [searxngDraft, setSearxngDraft] = useState(searxngUrl);
+  const [patDraft, setPatDraft] = useState(githubPat);
+  const [defaultRepoDraft, setDefaultRepoDraft] = useState(githubDefaultRepo);
+  const [ghTesting, setGhTesting] = useState(false);
 
   useEffect(() => {
     setGcDraft({ user_name: globalContext.user_name, rules: globalContext.rules });
   }, [globalContext.user_name, globalContext.rules]);
 
+  useEffect(() => setSearxngDraft(searxngUrl), [searxngUrl]);
+  useEffect(() => setPatDraft(githubPat), [githubPat]);
+  useEffect(() => setDefaultRepoDraft(githubDefaultRepo), [githubDefaultRepo]);
+
   useEffect(() => {
     if (!getBaseUrl() || !getToken()) return;
     fetchGlobalContext().then(setGlobalContext).catch(() => {});
   }, [setGlobalContext]);
-
-  const saveGlobal = async () => {
-    setGcSaving(true);
-    setGcStatus(null);
-    try {
-      const saved = await saveGlobalContext(gcDraft);
-      setGlobalContext(saved);
-      setGcStatus("Saved");
-      setTimeout(() => setGcStatus(null), 2000);
-    } catch (e) {
-      setGcStatus(`Failed: ${e}`);
-    } finally {
-      setGcSaving(false);
-    }
-  };
-  const gcDirty =
-    gcDraft.user_name !== globalContext.user_name || gcDraft.rules !== globalContext.rules;
 
   const installedModels = catalogue.filter((m) => m.installed);
 
@@ -99,25 +54,38 @@ export default function Settings() {
     try {
       const data = await fetchModels();
       setCatalogue(data.catalogue);
-    } catch { /* server not connected yet */ }
+    } catch { /* not connected */ }
     finally { setLoadingModels(false); }
   }, []);
 
   useEffect(() => { if (getBaseUrl() && getToken()) loadModels(); }, [loadModels]);
 
-  const save = () => {
+  const saveConnection = () => {
     setBaseUrl(url);
     setToken(token);
   };
 
   const test = async () => {
-    save();
+    saveConnection();
     try {
       const h = await checkHealth();
       setConnStatus({ ok: true, msg: `Connected — Ollama: ${h.ollama}` });
       loadModels();
     } catch (e) {
       setConnStatus({ ok: false, msg: `Failed: ${String(e)}` });
+    }
+  };
+
+  const saveGlobal = async () => {
+    setGcSaving(true);
+    try {
+      const saved = await saveGlobalContext(gcDraft);
+      setGlobalContext(saved);
+      pushSnack("Saved");
+    } catch (e) {
+      pushSnack(`Failed: ${e}`, { tone: "error" });
+    } finally {
+      setGcSaving(false);
     }
   };
 
@@ -136,7 +104,7 @@ export default function Settings() {
         (error) => {
           setPulling((p) => ({ ...p, [modelId]: { status: "Error", pct: null, error } }));
           clearAfterDelay(modelId);
-        }
+        },
       );
     } catch (e) {
       setPulling((p) => ({ ...p, [modelId]: { status: "Error", pct: null, error: String(e) } }));
@@ -152,159 +120,268 @@ export default function Settings() {
 
   const families = [...new Set(catalogue.map((m) => m.family))];
 
+  const testGithub = async () => {
+    if (!patDraft.trim()) return;
+    setGhTesting(true);
+    try {
+      // Save first so subsequent calls (RepoBrowser) use the new token.
+      setGithubPat(patDraft);
+      setGithubDefaultRepo(defaultRepoDraft);
+      const login = await ghWhoami(patDraft);
+      pushSnack(`Connected as ${login}`);
+    } catch (e) {
+      pushSnack(`Test failed: ${e}`, { tone: "error" });
+    } finally {
+      setGhTesting(false);
+    }
+  };
+
   return (
-    <div style={s.page}>
-      <div style={s.title}>Settings</div>
+    <div style={{ padding: 24, maxWidth: 720, overflowY: "auto", flex: 1 }}>
+      <h1 style={{ fontSize: 22, fontWeight: 700, color: palette.text, margin: "0 0 24px" }}>Settings</h1>
 
-      {/* Connection */}
-      <div style={s.section}>
-        <div style={s.sectionTitle}>Server connection</div>
-        <label style={s.label}>Server URL</label>
-        <input style={s.input} value={url} onChange={(e) => setUrl(e.target.value)}
-          placeholder="http://100.x.x.x:8765" />
-        <label style={s.label}>API Token</label>
-        <input style={s.input} type="password" value={token} onChange={(e) => setTokenState(e.target.value)} />
-        <button style={s.btn} onClick={test}>Save & Test</button>
-        {connStatus && (
-          <div style={{ ...s.status, ...(connStatus.ok ? {} : s.statusErr) }}>{connStatus.msg}</div>
-        )}
-      </div>
+      <Section title="Server connection">
+        <Label>Server URL</Label>
+        <TextInput value={url} onChange={(e) => setUrl(e.target.value)} placeholder="http://100.x.x.x:8765" />
+        <Label>API token</Label>
+        <TextInput type="password" value={token} onChange={(e) => setTokenState(e.target.value)} />
+        <div style={{ marginTop: 12 }}>
+          <Button onClick={test}>Save & Test</Button>
+          {connStatus && (
+            <span style={{
+              marginLeft: 12,
+              fontSize: 13,
+              color: connStatus.ok ? palette.success : palette.error,
+            }}>
+              {connStatus.msg}
+            </span>
+          )}
+        </div>
+      </Section>
 
-      {/* Global context */}
-      <div style={s.section}>
-        <div style={s.sectionTitle}>Global context</div>
-        <label style={s.label}>Your name</label>
-        <input
-          style={s.input}
+      <Section
+        title="Global context"
+        description="Soft preferences the assistant applies across every project. Treated as guidelines, not commands."
+      >
+        <Label>Your name</Label>
+        <TextInput
           value={gcDraft.user_name}
           onChange={(e) => setGcDraft({ ...gcDraft, user_name: e.target.value })}
           placeholder="e.g. Oli"
         />
-        <label style={s.label}>Global guidelines</label>
-        <textarea
-          style={{
-            ...s.input,
-            minHeight: 120,
-            fontFamily: "inherit",
-            resize: "vertical",
-          }}
+        <Label>Standing guidelines</Label>
+        <TextArea
           value={gcDraft.rules}
           onChange={(e) => setGcDraft({ ...gcDraft, rules: e.target.value })}
-          placeholder={"Soft preferences the assistant applies across every project.\nExamples: British English, avoid em-dashes, be concise."}
+          placeholder={"Examples: British English, avoid em-dashes, be concise."}
         />
-        <div style={{ fontSize: 12, color: "#666", marginTop: -8, marginBottom: 12 }}>
-          Treated as soft preferences — the assistant can deviate for specific requests and
-          will add one line explaining why when it does.
-        </div>
-        <button
-          style={{ ...s.btn, ...(!gcDirty || gcSaving ? { background: "#333", cursor: "not-allowed" } : {}) }}
-          onClick={saveGlobal}
-          disabled={!gcDirty || gcSaving}
-        >
-          {gcSaving ? "Saving…" : "Save"}
-        </button>
-        {gcStatus && <span style={{ marginLeft: 12, color: "#4caf50", fontSize: 13 }}>{gcStatus}</span>}
-      </div>
-
-      {/* Active model */}
-      {installedModels.length > 0 && (
-        <div style={s.section}>
-          <div style={s.sectionTitle}>Active model</div>
-          <select
-            style={s.select}
-            value={model}
-            onChange={(e) => setModel(e.target.value)}
+        <div style={{ marginTop: 12 }}>
+          <Button
+            onClick={saveGlobal}
+            loading={gcSaving}
+            disabled={
+              gcDraft.user_name === globalContext.user_name &&
+              gcDraft.rules === globalContext.rules
+            }
           >
-            {installedModels.map((m) => (
-              <option key={m.id} value={m.id}>
-                {m.label} ({m.size_gb} GB)
-              </option>
-            ))}
-          </select>
+            Save
+          </Button>
         </div>
+      </Section>
+
+      <Section
+        title="AI tools"
+        description="Optional capabilities the assistant can reach for during a chat."
+      >
+        <Card padding={16} style={{ marginBottom: 12 }}>
+          <div style={{ fontSize: 13, fontWeight: 600, color: palette.text, marginBottom: 8 }}>
+            Web search
+          </div>
+          <Hint>
+            Point at a SearXNG instance (e.g. running on TrueNAS over Tailscale) to enable per-chat
+            web search. Include scheme and port.
+          </Hint>
+          <div style={{ marginTop: 8, display: "flex", gap: 8 }}>
+            <TextInput
+              style={{ marginTop: 0 }}
+              value={searxngDraft}
+              onChange={(e) => setSearxngDraft(e.target.value)}
+              placeholder="http://100.x.x.x:8888"
+            />
+            <Button
+              onClick={() => { setSearxngUrl(searxngDraft); pushSnack("Saved"); }}
+              disabled={searxngDraft === searxngUrl}
+            >
+              Save
+            </Button>
+          </div>
+        </Card>
+
+        <Card padding={16}>
+          <div style={{ fontSize: 13, fontWeight: 600, color: palette.text, marginBottom: 8 }}>
+            GitHub
+          </div>
+          <Hint>
+            Personal Access Token used by the in-chat repo browser to read your repos. Fine-grained
+            PATs work best — minimum scope, expires automatically. Stays in your browser; never sent
+            to the server.
+          </Hint>
+          <Label>PAT</Label>
+          <TextInput
+            type="password"
+            value={patDraft}
+            onChange={(e) => setPatDraft(e.target.value)}
+            placeholder="github_pat_…"
+          />
+          <Label>Default repo (optional)</Label>
+          <TextInput
+            value={defaultRepoDraft}
+            onChange={(e) => setDefaultRepoDraft(e.target.value)}
+            placeholder="owner/repo"
+          />
+          <div style={{ marginTop: 12, display: "flex", gap: 8 }}>
+            <Button
+              onClick={() => {
+                setGithubPat(patDraft);
+                setGithubDefaultRepo(defaultRepoDraft);
+                pushSnack("Saved");
+              }}
+              disabled={patDraft === githubPat && defaultRepoDraft === githubDefaultRepo}
+            >
+              Save
+            </Button>
+            <Button variant="outlined" loading={ghTesting} onClick={testGithub} disabled={!patDraft.trim()}>
+              Test connection
+            </Button>
+          </div>
+        </Card>
+      </Section>
+
+      {installedModels.length > 0 && (
+        <Section title="Active model">
+          <Select value={model} onChange={(e) => setModel((e.target as unknown as HTMLSelectElement).value)}>
+            {installedModels.map((m) => (
+              <option key={m.id} value={m.id}>{m.label} ({m.size_gb} GB)</option>
+            ))}
+          </Select>
+        </Section>
       )}
 
-      {/* Model library */}
-      <div style={s.section}>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
-          <div style={s.sectionTitle}>Model library</div>
-          <button style={{ ...s.btnSm, ...s.btnGhost }} onClick={loadModels}>
+      <Section
+        title="Model library"
+        action={
+          <Button size="sm" variant="outlined" onClick={loadModels}>
             {loadingModels ? "Refreshing…" : "Refresh"}
-          </button>
-        </div>
-
+          </Button>
+        }
+      >
         {catalogue.length === 0 && (
-          <p style={{ color: "#555", fontSize: 14 }}>
-            Save & Test your connection above to browse models.
-          </p>
+          <Hint>Save & Test your connection above to browse models.</Hint>
         )}
 
         {families.map((family) => (
-          <div key={family}>
-            <div style={s.familyHeader}>{family}</div>
+          <div key={family} style={{ marginBottom: 16 }}>
+            <div style={{ fontSize: 12, fontWeight: 600, color: palette.textDim, marginBottom: 6 }}>
+              {family}
+            </div>
             {catalogue.filter((m) => m.family === family).map((m) => {
               const pullState = pulling[m.id];
+              const installed = m.installed;
               return (
-                <div key={m.id} style={{ ...s.card, ...(m.installed ? s.cardInstalled : {}) }}>
-                  <div style={s.cardRow}>
+                <Card
+                  key={m.id}
+                  padding={12}
+                  style={{
+                    marginBottom: 8,
+                    borderColor: installed ? palette.primary : palette.border,
+                  }}
+                >
+                  <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
                     <div style={{ flex: 1 }}>
                       <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                        <span style={s.modelLabel}>{m.label}</span>
-                        {m.installed && <span style={s.badge}>Installed</span>}
-                        {m.id === model && m.installed && (
-                          <span style={{ ...s.badge, background: "#14532d", color: "#86efac" }}>Active</span>
+                        <span style={{ fontWeight: 600, color: palette.text }}>{m.label}</span>
+                        {installed && (
+                          <span style={badge(palette.primary, "#bfdbfe")}>Installed</span>
+                        )}
+                        {m.id === model && installed && (
+                          <span style={badge(palette.success, "#bbf7d0")}>Active</span>
                         )}
                       </div>
-                      <div style={s.modelMeta}>{m.size_gb} GB · {m.notes}</div>
+                      <div style={{ fontSize: 12, color: palette.textMuted, marginTop: 2 }}>
+                        {m.size_gb} GB · {m.notes}
+                      </div>
                     </div>
                     <div style={{ display: "flex", gap: 6, flexShrink: 0 }}>
-                      {m.installed ? (
+                      {installed ? (
                         <>
                           {m.id !== model && (
-                            <button style={s.btnSm} onClick={() => setModel(m.id)}>Use</button>
+                            <Button size="sm" onClick={() => setModel(m.id)}>Use</Button>
                           )}
-                          <button
-                            style={{ ...s.btnSm, ...s.btnDanger }}
-                            onClick={() => handleDelete(m.id)}
-                          >
+                          <Button size="sm" variant="danger" onClick={() => handleDelete(m.id)}>
                             Delete
-                          </button>
+                          </Button>
                         </>
                       ) : (
-                        <button
-                          style={{ ...s.btnSm, ...(pullState ? s.btnGhost : {}) }}
-                          onClick={() => !pullState && handlePull(m.id)}
+                        <Button
+                          size="sm"
+                          variant="outlined"
+                          loading={!!pullState && !pullState.error}
                           disabled={!!pullState}
+                          onClick={() => handlePull(m.id)}
                         >
                           {pullState ? (pullState.error ? "Failed" : "Downloading…") : "Download"}
-                        </button>
+                        </Button>
                       )}
                     </div>
                   </div>
                   {pullState && (
-                    <div>
+                    <div style={{ marginTop: 8 }}>
                       {pullState.error ? (
-                        <div style={{ fontSize: 11, color: "#f44336", marginTop: 6 }}>
-                          {pullState.error}
-                        </div>
+                        <div style={{ fontSize: 11, color: palette.error }}>{pullState.error}</div>
                       ) : (
                         <>
-                          <div style={s.progressBar}>
-                            <div style={{ ...s.progressFill, width: `${pullState.pct ?? 0}%` }} />
+                          <div
+                            style={{
+                              height: 4,
+                              background: palette.surfaceVariant,
+                              borderRadius: 2,
+                              overflow: "hidden",
+                            }}
+                          >
+                            <div
+                              style={{
+                                width: `${pullState.pct ?? 0}%`,
+                                height: "100%",
+                                background: palette.primary,
+                                transition: "width 200ms",
+                              }}
+                            />
                           </div>
-                          <div style={{ fontSize: 11, color: "#555", marginTop: 4 }}>
-                            {pullState.status}{pullState.pct != null ? ` — ${pullState.pct}%` : ""}
+                          <div style={{ fontSize: 11, color: palette.textDim, marginTop: 4 }}>
+                            {pullState.status}
+                            {pullState.pct != null ? ` — ${pullState.pct}%` : ""}
                           </div>
                         </>
                       )}
                     </div>
                   )}
-                </div>
+                </Card>
               );
             })}
           </div>
         ))}
-      </div>
+      </Section>
     </div>
   );
+}
+
+function badge(bg: string, fg: string): React.CSSProperties {
+  return {
+    fontSize: 11,
+    fontWeight: 600,
+    padding: "2px 7px",
+    borderRadius: radius.pill,
+    background: bg,
+    color: fg,
+  };
 }

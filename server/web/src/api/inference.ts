@@ -7,6 +7,12 @@ export interface GenerateOptions {
   model: string;
   userName?: string;
   globalRules?: string;
+  /** Forwarded to Ollama as num_ctx — the project's per-conversation context window. */
+  numCtx?: number;
+  /** Disable the server-side reasoning preamble for short-form requests like Refine. */
+  applyDefaultPreamble?: boolean;
+  /** Cap on output tokens for the model. */
+  maxTokens?: number;
 }
 
 export async function streamGenerate(
@@ -18,7 +24,12 @@ export async function streamGenerate(
   const body = {
     system_prompt: opts.systemPrompt,
     messages: opts.messages.map((m) => ({ role: m.role, content: m.content })),
-    config: { model: opts.model },
+    config: {
+      model: opts.model,
+      ...(opts.numCtx ? { num_ctx: opts.numCtx } : {}),
+      ...(opts.applyDefaultPreamble === false ? { apply_default_preamble: false } : {}),
+      ...(opts.maxTokens ? { max_tokens: opts.maxTokens } : {}),
+    },
     user_name: opts.userName ?? "",
     global_rules: opts.globalRules ?? "",
   };

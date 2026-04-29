@@ -36,6 +36,17 @@ export interface Message {
   deleted_at: number | null;
 }
 
+export interface QuickAction {
+  remote_id: string;
+  project_remote_id: string;
+  name: string;
+  prompt_template: string;
+  sort_order: number;
+  created_at: number;
+  updated_at: number;
+  deleted_at: number | null;
+}
+
 export async function fetchProjects(): Promise<Project[]> {
   const r = await apiFetch("/v1/sync/projects?since=0");
   return r.json();
@@ -151,6 +162,7 @@ export interface SyncFullResult {
   projects: Project[];
   chats: Chat[];
   messages: Message[];
+  quick_actions: QuickAction[];
 }
 
 export async function syncFull(since: number): Promise<SyncFullResult> {
@@ -160,5 +172,48 @@ export async function syncFull(since: number): Promise<SyncFullResult> {
     projects: data.projects ?? [],
     chats: data.chats ?? [],
     messages: data.messages ?? [],
+    quick_actions: data.quick_actions ?? [],
   };
+}
+
+export async function fetchQuickActions(projectRemoteId: string): Promise<QuickAction[]> {
+  const r = await apiFetch(`/v1/sync/quick_actions?since=0&project_remote_id=${projectRemoteId}`);
+  return r.json();
+}
+
+export async function upsertQuickAction(
+  qa: Omit<QuickAction, "remote_id"> & { remote_id?: string | null },
+): Promise<QuickAction> {
+  const now = Date.now();
+  const item = { ...qa, remote_id: qa.remote_id ?? null, updated_at: now };
+  const r = await apiFetch("/v1/sync/quick_actions", {
+    method: "PUT",
+    body: JSON.stringify({ items: [item] }),
+  });
+  const data = await r.json();
+  return { ...item, remote_id: qa.remote_id ?? data.remote_ids[0] } as QuickAction;
+}
+
+export async function deleteQuickAction(qa: QuickAction): Promise<void> {
+  const now = Date.now();
+  await apiFetch("/v1/sync/quick_actions", {
+    method: "PUT",
+    body: JSON.stringify({ items: [{ ...qa, updated_at: now, deleted_at: now }] }),
+  });
+}
+
+/** Soft-delete a single message (for regenerate). */
+export async function deleteMessage(msg: Message): Promise<void> {
+  const now = Date.now();
+  await apiFetch("/v1/sync/messages", {
+    method: "PUT",
+    body: JSON.stringify({
+      items: [{
+        ...msg,
+        updated_at: now,
+        deleted_at: now,
+        attachment_paths: "",
+      }],
+    }),
+  });
 }
