@@ -1,8 +1,5 @@
 package com.oli.projectsai.inference
 
-import com.oli.projectsai.data.appscript.AppScriptClient
-import com.oli.projectsai.data.appscript.AppScriptToolPromptBuilder
-import com.oli.projectsai.data.appscript.ResolvedAppScriptTool
 import com.oli.projectsai.data.attachments.AttachmentStore
 import com.oli.projectsai.data.db.entity.Message
 import com.oli.projectsai.data.db.entity.MessageRole
@@ -12,7 +9,6 @@ import com.oli.projectsai.data.repository.ChatRepository
 import com.oli.projectsai.data.search.PageFetcher
 import com.oli.projectsai.data.search.WebSearchClient
 import com.oli.projectsai.di.ApplicationScope
-import org.json.JSONObject
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -43,7 +39,6 @@ class GenerationController @Inject constructor(
     private val webSearchClient: WebSearchClient,
     private val pageFetcher: PageFetcher,
     private val searchSettings: SearchSettings,
-    private val appScriptClient: AppScriptClient,
     @ApplicationScope private val scope: CoroutineScope
 ) {
 
@@ -126,17 +121,15 @@ class GenerationController @Inject constructor(
             }
 
             val depth = if (params.webSearchEnabled) searchSettings.searchDepth.first() else SearchDepth.AUTO_FETCH
-            val webInstructions = when {
+            val toolInstructions = when {
                 !params.webSearchEnabled -> ""
                 depth == SearchDepth.TOOL_LOOP -> TOOL_LOOP_INSTRUCTIONS
                 else -> AUTO_FETCH_INSTRUCTIONS
             }
-            val appScriptInstructions = AppScriptToolPromptBuilder.format(params.appScriptTools)
             val effectiveSystemPrompt = buildList {
                 add(currentTemporalContext())
                 if (params.systemPrompt.isNotBlank()) add(params.systemPrompt)
-                if (webInstructions.isNotBlank()) add(webInstructions)
-                if (appScriptInstructions.isNotBlank()) add(appScriptInstructions)
+                if (toolInstructions.isNotBlank()) add(toolInstructions)
             }.joinToString("\n\n")
 
             val genConfig = GenerationConfig(
@@ -144,14 +137,10 @@ class GenerationController @Inject constructor(
                 applyDefaultPreamble = params.applyDefaultPreamble,
                 numCtx = params.numCtx
             )
-            val hasAppScripts = params.appScriptTools.isNotEmpty()
-            cancelled = when {
-                hasAppScripts || (params.webSearchEnabled && depth == SearchDepth.TOOL_LOOP) ->
-                    runToolLoop(chatMessages, effectiveSystemPrompt, fullResponse, params.backendId, genConfig, params.appScriptTools)
-                params.webSearchEnabled && depth == SearchDepth.AUTO_FETCH ->
-                    runAutoFetch(chatMessages, effectiveSystemPrompt, fullResponse, params.backendId, genConfig)
-                else ->
-                    runSingleTurn(chatMessages, effectiveSystemPrompt, fullResponse, params.backendId, genConfig)
+            cancelled = when (depth.takeIf { params.webSearchEnabled }) {
+                SearchDepth.TOOL_LOOP -> runToolLoop(chatMessages, effectiveSystemPrompt, fullResponse, params.backendId, genConfig)
+                SearchDepth.AUTO_FETCH -> runAutoFetch(chatMessages, effectiveSystemPrompt, fullResponse, params.backendId, genConfig)
+                null -> runSingleTurn(chatMessages, effectiveSystemPrompt, fullResponse, params.backendId, genConfig)
             }
         } catch (ie: InferenceError) {
             lastFailed[chatId] = LastFailed(params.currentUserContent, params.currentAttachments)
@@ -313,8 +302,7 @@ class GenerationController @Inject constructor(
         systemPromptText: String,
         fullResponse: StringBuilder,
         backendId: String? = null,
-        config: GenerationConfig = GenerationConfig(),
-        appScriptTools: List<ResolvedAppScriptTool> = emptyList()
+        config: GenerationConfig = GenerationConfig()
     ): Boolean {
         var conversation = chatMessages
         repeat(TOOL_LOOP_MAX_ROUNDS) { round ->
@@ -342,8 +330,7 @@ class GenerationController @Inject constructor(
             val text = buf.toString()
             val searchMatch = SEARCH_TAG_REGEX.find(text)
             val fetchMatch = FETCH_TAG_REGEX.find(text)
-            val appscriptMatch = APPSCRIPT_TAG_REGEX.find(text)
-            val firstTool = listOfNotNull(searchMatch, fetchMatch, appscriptMatch).minByOrNull { it.range.first }
+            val firstTool = listOfNotNull(searchMatch, fetchMatch).minByOrNull { it.range.first }
 
             if (firstTool == null) {
                 fullResponse.append(text)
@@ -372,7 +359,6 @@ class GenerationController @Inject constructor(
                     if (page.isBlank()) "Fetch for $url returned no readable content."
                     else "Page content for $url:\n\n$page"
                 }
-                appscriptMatch -> dispatchAppScript(firstTool, appScriptTools)
                 else -> ""
             }
 
@@ -387,35 +373,6 @@ class GenerationController @Inject constructor(
             updateStreaming("")
         }
         return false
-    }
-
-    private suspend fun dispatchAppScript(
-        match: MatchResult,
-        tools: List<ResolvedAppScriptTool>
-    ): String {
-        val name = APPSCRIPT_NAME_REGEX.find(match.value)?.groupValues?.getOrNull(1).orEmpty()
-        if (name.isBlank()) {
-            return "Tool call missing name= attribute. Available: ${tools.joinToString { it.name }}"
-        }
-        val tool = tools.firstOrNull { it.name == name }
-            ?: return "Unknown tool: $name. Available: ${tools.joinToString { it.name }}"
-        val argsRaw = match.groupValues.getOrNull(1).orEmpty().trim().ifBlank { "{}" }
-        val args = runCatching { JSONObject(argsRaw) }.getOrElse {
-            return "Tool ${tool.name} got invalid JSON args: $argsRaw"
-        }
-        updateSearchStatus("Calling ${tool.name}…")
-        return try {
-            val raw = appScriptClient.dispatch(tool, args)
-            val truncated = if (raw.length > APPSCRIPT_RESULT_MAX_CHARS) {
-                raw.take(APPSCRIPT_RESULT_MAX_CHARS) +
-                    "\n\n[truncated — result was ${raw.length} chars; only the first $APPSCRIPT_RESULT_MAX_CHARS shown]"
-            } else raw
-            "Result from ${tool.name}:\n\n$truncated"
-        } catch (t: Throwable) {
-            "Tool ${tool.name} failed: ${t.message ?: "unknown error"}"
-        } finally {
-            updateSearchStatus(null)
-        }
     }
 }
 
@@ -434,17 +391,13 @@ private fun currentTemporalContext(): String {
 
 private val SEARCH_TAG_REGEX = Regex("<search>(.*?)</search>", RegexOption.DOT_MATCHES_ALL)
 private val FETCH_TAG_REGEX = Regex("<fetch>(.*?)</fetch>", RegexOption.DOT_MATCHES_ALL)
-private val APPSCRIPT_TAG_REGEX = Regex("<appscript[^>]*>(.*?)</appscript>", RegexOption.DOT_MATCHES_ALL)
-private val APPSCRIPT_NAME_REGEX = Regex("name=\"([^\"]+)\"")
 private const val TOOL_LOOP_MAX_ROUNDS = 4
 private const val SLOW_RESPONSE_THRESHOLD_MS = 30_000L
-private const val APPSCRIPT_RESULT_MAX_CHARS = 8000
 
 private fun stripToolTags(text: String): String {
     val sIdx = text.indexOf("<search>")
     val fIdx = text.indexOf("<fetch>")
-    val aIdx = text.indexOf("<appscript")
-    val cut = listOf(sIdx, fIdx, aIdx).filter { it >= 0 }.minOrNull() ?: return text
+    val cut = listOf(sIdx, fIdx).filter { it >= 0 }.minOrNull() ?: return text
     return text.substring(0, cut)
 }
 

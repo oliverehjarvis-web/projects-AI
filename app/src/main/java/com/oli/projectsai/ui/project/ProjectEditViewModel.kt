@@ -1,17 +1,8 @@
 package com.oli.projectsai.ui.project
 
-import android.app.PendingIntent
-import android.content.Intent
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.oli.projectsai.data.appscript.AppScriptClient
-import com.oli.projectsai.data.appscript.AppScriptSecretStore
-import com.oli.projectsai.data.appscript.GoogleOAuthManager
-import com.oli.projectsai.data.appscript.ResolvedAppScriptTool
-import com.oli.projectsai.data.db.dao.AppScriptToolDao
-import com.oli.projectsai.data.db.entity.AppScriptAuthMode
-import com.oli.projectsai.data.db.entity.AppScriptTool
 import com.oli.projectsai.data.db.entity.Project
 import com.oli.projectsai.data.preferences.RemoteSettings
 import com.oli.projectsai.data.privacy.PrivacySession
@@ -30,12 +21,10 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
-import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
-import org.json.JSONObject
 import javax.inject.Inject
 
 @HiltViewModel
@@ -44,10 +33,6 @@ class ProjectEditViewModel @Inject constructor(
     private val projectRepository: ProjectRepository,
     private val inferenceManager: InferenceManager,
     private val contextSizing: ContextSizing,
-    private val appScriptToolDao: AppScriptToolDao,
-    private val appScriptSecretStore: AppScriptSecretStore,
-    private val appScriptClient: AppScriptClient,
-    private val oauthManager: GoogleOAuthManager,
     remoteSettings: RemoteSettings,
     privacySession: PrivacySession
 ) : ViewModel() {
@@ -109,194 +94,6 @@ class ProjectEditViewModel @Inject constructor(
     val isComputingAutoContext: StateFlow<Boolean> = _isComputingAutoContext.asStateFlow()
 
     private var existingProject: Project? = null
-
-    // ── Apps Script tools (per-project data sources) ─────────────────────────────
-
-    val tools: StateFlow<List<AppScriptTool>> =
-        if (projectId != -1L) appScriptToolDao.getByProject(projectId)
-            .stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
-        else flowOf(emptyList<AppScriptTool>())
-            .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
-
-    private val _editingTool = MutableStateFlow<AppScriptTool?>(null)
-    val editingTool: StateFlow<AppScriptTool?> = _editingTool.asStateFlow()
-
-    private val _editorOpen = MutableStateFlow(false)
-    val editorOpen: StateFlow<Boolean> = _editorOpen.asStateFlow()
-
-    val googleSignedIn: StateFlow<Boolean> = oauthManager.signedIn
-    val googleAccountEmail: StateFlow<String?> = oauthManager.accountEmail
-    val googleWebClientConfigured: Boolean get() = oauthManager.webClientIdConfigured
-
-    private val _oauthConsentIntent = MutableStateFlow<PendingIntent?>(null)
-    val oauthConsentIntent: StateFlow<PendingIntent?> = _oauthConsentIntent.asStateFlow()
-
-    private val _testCallResult = MutableStateFlow<String?>(null)
-    val testCallResult: StateFlow<String?> = _testCallResult.asStateFlow()
-
-    private val _toolError = MutableStateFlow<String?>(null)
-    val toolError: StateFlow<String?> = _toolError.asStateFlow()
-
-    fun openAddTool() {
-        _editingTool.value = AppScriptTool(
-            projectId = projectId,
-            name = "",
-            description = "",
-            authMode = AppScriptAuthMode.SHARED_SECRET
-        )
-        _editorOpen.value = true
-    }
-
-    fun openEditTool(tool: AppScriptTool) {
-        _editingTool.value = tool
-        _editorOpen.value = true
-    }
-
-    fun closeEditor() {
-        _editorOpen.value = false
-        _editingTool.value = null
-    }
-
-    /**
-     * Persist the in-flight tool. [secretInput] is non-null only when the user is changing
-     * the secret (blank means clear it). Untouched secrets are left as-is on the existing row.
-     */
-    fun saveEditingTool(
-        name: String,
-        description: String,
-        argSchemaHint: String,
-        authMode: AppScriptAuthMode,
-        webAppUrl: String,
-        scriptId: String,
-        functionName: String,
-        enabled: Boolean,
-        secretInput: String?
-    ) {
-        val draft = _editingTool.value ?: return
-        if (name.isBlank()) {
-            _toolError.value = "Tool name is required."
-            return
-        }
-        if (projectId == -1L) {
-            _toolError.value = "Save the project first before adding data sources."
-            return
-        }
-        viewModelScope.launch {
-            val now = System.currentTimeMillis()
-            if (draft.id == 0L) {
-                val toInsert = draft.copy(
-                    name = name.trim(),
-                    description = description.trim(),
-                    argSchemaHint = argSchemaHint.trim(),
-                    authMode = authMode,
-                    webAppUrl = webAppUrl.trim(),
-                    scriptId = scriptId.trim(),
-                    functionName = functionName.trim(),
-                    enabled = enabled,
-                    updatedAt = now,
-                    createdAt = now
-                )
-                val newId = appScriptToolDao.insert(toInsert)
-                if (secretInput != null && secretInput.isNotBlank()) {
-                    val ref = appScriptSecretStore.putSecret(newId, secretInput)
-                    appScriptToolDao.update(toInsert.copy(id = newId, secretRef = ref, updatedAt = System.currentTimeMillis()))
-                }
-            } else {
-                val newSecretRef = when {
-                    secretInput == null -> draft.secretRef               // unchanged
-                    secretInput.isBlank() -> {                             // cleared
-                        appScriptSecretStore.deleteSecret(draft.secretRef)
-                        null
-                    }
-                    else -> appScriptSecretStore.putSecret(draft.id, secretInput)
-                }
-                appScriptToolDao.update(
-                    draft.copy(
-                        name = name.trim(),
-                        description = description.trim(),
-                        argSchemaHint = argSchemaHint.trim(),
-                        authMode = authMode,
-                        webAppUrl = webAppUrl.trim(),
-                        scriptId = scriptId.trim(),
-                        functionName = functionName.trim(),
-                        enabled = enabled,
-                        secretRef = newSecretRef,
-                        updatedAt = now
-                    )
-                )
-            }
-            closeEditor()
-        }
-    }
-
-    fun deleteTool(tool: AppScriptTool) {
-        viewModelScope.launch {
-            appScriptSecretStore.deleteSecret(tool.secretRef)
-            appScriptToolDao.softDelete(tool.id)
-        }
-    }
-
-    /** Calls the script with empty args and surfaces the raw response for debugging. */
-    fun testCall(tool: AppScriptTool, secretInputOverride: String? = null) {
-        viewModelScope.launch {
-            _testCallResult.value = null
-            _toolError.value = null
-            val resolved = when (tool.authMode) {
-                AppScriptAuthMode.SHARED_SECRET -> {
-                    val secret = secretInputOverride
-                        ?: appScriptSecretStore.getSecret(tool.secretRef)
-                    ResolvedAppScriptTool(
-                        name = tool.name.ifBlank { "tool" },
-                        description = tool.description,
-                        argSchemaHint = tool.argSchemaHint,
-                        authMode = tool.authMode,
-                        webAppUrl = tool.webAppUrl,
-                        scriptId = "",
-                        functionName = "",
-                        secret = secret
-                    )
-                }
-                AppScriptAuthMode.OAUTH -> ResolvedAppScriptTool(
-                    name = tool.name.ifBlank { "tool" },
-                    description = tool.description,
-                    argSchemaHint = tool.argSchemaHint,
-                    authMode = tool.authMode,
-                    webAppUrl = "",
-                    scriptId = tool.scriptId,
-                    functionName = tool.functionName,
-                    secret = null
-                )
-            }
-            try {
-                val raw = appScriptClient.dispatch(resolved, JSONObject())
-                _testCallResult.value = raw
-            } catch (t: Throwable) {
-                _testCallResult.value = "Error: ${t.message ?: "unknown failure"}"
-            }
-        }
-    }
-
-    fun clearTestCallResult() { _testCallResult.value = null }
-    fun clearToolError() { _toolError.value = null }
-
-    fun connectGoogle() {
-        viewModelScope.launch {
-            when (val r = oauthManager.beginSignIn()) {
-                GoogleOAuthManager.BeginResult.Success -> Unit
-                is GoogleOAuthManager.BeginResult.NeedsConsent -> _oauthConsentIntent.value = r.pendingIntent
-                is GoogleOAuthManager.BeginResult.Error -> _toolError.value = r.message
-            }
-        }
-    }
-
-    fun completeGoogleSignIn(data: Intent?) {
-        _oauthConsentIntent.value = null
-        oauthManager.completeSignIn(data).onFailure { _toolError.value = it.message }
-    }
-
-    fun clearOAuthConsentIntent() { _oauthConsentIntent.value = null }
-
-    fun disconnectGoogle() = oauthManager.signOut()
 
     init {
         if (projectId != -1L) {

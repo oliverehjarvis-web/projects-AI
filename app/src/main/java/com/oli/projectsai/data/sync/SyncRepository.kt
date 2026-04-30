@@ -1,12 +1,9 @@
 package com.oli.projectsai.data.sync
 
-import com.oli.projectsai.data.db.dao.AppScriptToolDao
 import com.oli.projectsai.data.db.dao.ChatDao
 import com.oli.projectsai.data.db.dao.MessageDao
 import com.oli.projectsai.data.db.dao.ProjectDao
 import com.oli.projectsai.data.db.dao.QuickActionDao
-import com.oli.projectsai.data.db.entity.AppScriptAuthMode
-import com.oli.projectsai.data.db.entity.AppScriptTool
 import com.oli.projectsai.data.db.entity.Chat
 import com.oli.projectsai.data.db.entity.Message
 import com.oli.projectsai.data.db.entity.MessageRole
@@ -37,8 +34,7 @@ class SyncRepository @Inject constructor(
     private val projectDao: ProjectDao,
     private val chatDao: ChatDao,
     private val messageDao: MessageDao,
-    private val quickActionDao: QuickActionDao,
-    private val appScriptToolDao: AppScriptToolDao
+    private val quickActionDao: QuickActionDao
 ) {
     suspend fun syncNow(): SyncResult = withContext(Dispatchers.IO) {
         val serverUrl = remoteSettings.serverUrl.first().trimEnd('/')
@@ -58,7 +54,6 @@ class SyncRepository @Inject constructor(
             pushChats(serverUrl, apiToken, lastSyncAt)
             pushMessages(serverUrl, apiToken, lastSyncAt)
             pushQuickActions(serverUrl, apiToken, lastSyncAt)
-            pushAppScriptTools(serverUrl, apiToken, lastSyncAt)
 
             remoteSettings.setLastSyncAt(now)
             SyncResult.Success
@@ -74,7 +69,6 @@ class SyncRepository @Inject constructor(
         applyChats(json.optJSONArray("chats") ?: JSONArray())
         applyMessages(json.optJSONArray("messages") ?: JSONArray())
         applyQuickActions(json.optJSONArray("quick_actions") ?: JSONArray())
-        applyAppScriptTools(json.optJSONArray("app_script_tools") ?: JSONArray())
     }
 
     private suspend fun applyProjects(arr: JSONArray) {
@@ -203,61 +197,6 @@ class SyncRepository @Inject constructor(
         }
     }
 
-    private suspend fun applyAppScriptTools(arr: JSONArray) {
-        for (i in 0 until arr.length()) {
-            val item = arr.getJSONObject(i)
-            val remoteId = item.getString("remote_id")
-            val projectRemoteId = item.getString("project_remote_id")
-            val project = projectDao.getByRemoteId(projectRemoteId) ?: continue
-            val updatedAt = item.getLong("updated_at")
-            val deletedAt = if (item.isNull("deleted_at")) null else item.getLong("deleted_at")
-            val authMode = when (item.optString("auth_mode")) {
-                "OAUTH" -> AppScriptAuthMode.OAUTH
-                else -> AppScriptAuthMode.SHARED_SECRET
-            }
-            val existing = appScriptToolDao.getByRemoteId(remoteId)
-            if (existing == null) {
-                // Secrets are NEVER synced — secretRef stays null on this device until the
-                // user re-enters it. ChatViewModel.resolveAppScriptTools skips SHARED_SECRET
-                // tools where secretRef was set on the source device but is missing here.
-                appScriptToolDao.insert(
-                    AppScriptTool(
-                        remoteId = remoteId,
-                        projectId = project.id,
-                        name = item.getString("name"),
-                        description = item.optString("description"),
-                        argSchemaHint = item.optString("arg_schema_hint"),
-                        authMode = authMode,
-                        webAppUrl = item.optString("web_app_url"),
-                        scriptId = item.optString("script_id"),
-                        functionName = item.optString("function_name"),
-                        secretRef = null,
-                        enabled = item.optBoolean("enabled", true),
-                        createdAt = item.getLong("created_at"),
-                        updatedAt = updatedAt,
-                        deletedAt = deletedAt
-                    )
-                )
-            } else if (updatedAt > existing.updatedAt) {
-                appScriptToolDao.update(
-                    existing.copy(
-                        name = item.getString("name"),
-                        description = item.optString("description"),
-                        argSchemaHint = item.optString("arg_schema_hint"),
-                        authMode = authMode,
-                        webAppUrl = item.optString("web_app_url"),
-                        scriptId = item.optString("script_id"),
-                        functionName = item.optString("function_name"),
-                        enabled = item.optBoolean("enabled", true),
-                        updatedAt = updatedAt,
-                        deletedAt = deletedAt
-                        // secretRef intentionally preserved from local row.
-                    )
-                )
-            }
-        }
-    }
-
     // ── Push ──────────────────────────────────────────────────────────────────
 
     private suspend fun pushProjects(serverUrl: String, apiToken: String, since: Long) {
@@ -342,40 +281,6 @@ class SyncRepository @Inject constructor(
         eligible.forEachIndexed { idx, m ->
             val rid = remoteIds.optString(idx)
             if (rid.isNotBlank() && m.remoteId != rid) messageDao.updateRemoteId(m.id, rid)
-        }
-    }
-
-    private suspend fun pushAppScriptTools(serverUrl: String, apiToken: String, since: Long) {
-        val items = appScriptToolDao.getAllForSync()
-            .filter { it.remoteId == null || it.updatedAt > since }
-        if (items.isEmpty()) return
-        val projectRemoteIdMap = projectDao.getAllForSync().associate { it.id to it.remoteId }
-        val arr = JSONArray()
-        val eligible = items.filter { projectRemoteIdMap[it.projectId] != null }
-        eligible.forEach { t ->
-            arr.put(JSONObject().apply {
-                put("remote_id", t.remoteId)
-                put("project_remote_id", projectRemoteIdMap[t.projectId])
-                put("name", t.name)
-                put("description", t.description)
-                put("arg_schema_hint", t.argSchemaHint)
-                put("auth_mode", t.authMode.name)
-                put("web_app_url", t.webAppUrl)
-                put("script_id", t.scriptId)
-                put("function_name", t.functionName)
-                put("enabled", t.enabled)
-                // secretRef is never sent — secrets are device-local.
-                put("created_at", t.createdAt)
-                put("updated_at", t.updatedAt)
-                if (t.deletedAt != null) put("deleted_at", t.deletedAt) else put("deleted_at", JSONObject.NULL)
-            })
-        }
-        if (arr.length() == 0) return
-        val response = put("$serverUrl/v1/sync/app_script_tools", apiToken, JSONObject().put("items", arr))
-        val remoteIds = response.optJSONArray("remote_ids") ?: return
-        eligible.forEachIndexed { idx, t ->
-            val rid = remoteIds.optString(idx)
-            if (rid.isNotBlank() && t.remoteId != rid) appScriptToolDao.updateRemoteId(t.id, rid)
         }
     }
 
