@@ -33,7 +33,8 @@ object AppModule {
                 AppDatabase.MIGRATION_2_3,
                 AppDatabase.MIGRATION_3_4,
                 AppDatabase.MIGRATION_4_5,
-                AppDatabase.MIGRATION_5_6
+                AppDatabase.MIGRATION_5_6,
+                AppDatabase.MIGRATION_6_7
             )
             .build()
 
@@ -48,4 +49,7 @@ object AppModule {
 
     @Provides
     fun provideQuickActionDao(db: AppDatabase): QuickActionDao = db.quickActionDao()
+
+    @Provides
+    fun provideAppScriptToolDao(db: AppDatabase): AppScriptToolDao = db.appScriptToolDao()
 }

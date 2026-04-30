@@ -5,18 +5,25 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.activity.result.IntentSenderRequest
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.WarningAmber
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.oli.projectsai.data.db.entity.AppScriptAuthMode
+import com.oli.projectsai.data.db.entity.AppScriptTool
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -38,6 +45,15 @@ fun ProjectEditScreen(
     val isRefining by viewModel.isRefining.collectAsStateWithLifecycle()
     val refineError by viewModel.refineError.collectAsStateWithLifecycle()
 
+    val tools by viewModel.tools.collectAsStateWithLifecycle()
+    val editingTool by viewModel.editingTool.collectAsStateWithLifecycle()
+    val editorOpen by viewModel.editorOpen.collectAsStateWithLifecycle()
+    val googleSignedIn by viewModel.googleSignedIn.collectAsStateWithLifecycle()
+    val googleAccount by viewModel.googleAccountEmail.collectAsStateWithLifecycle()
+    val oauthConsentIntent by viewModel.oauthConsentIntent.collectAsStateWithLifecycle()
+    val testCallResult by viewModel.testCallResult.collectAsStateWithLifecycle()
+    val toolError by viewModel.toolError.collectAsStateWithLifecycle()
+
     val snackbarHostState = remember { SnackbarHostState() }
 
     LaunchedEffect(refineError) {
@@ -45,6 +61,21 @@ fun ProjectEditScreen(
             snackbarHostState.showSnackbar(refineError!!)
             viewModel.clearRefineError()
         }
+    }
+
+    LaunchedEffect(toolError) {
+        if (toolError != null) {
+            snackbarHostState.showSnackbar(toolError!!)
+            viewModel.clearToolError()
+        }
+    }
+
+    val oauthLauncher = rememberOAuthLauncher { data -> viewModel.completeGoogleSignIn(data) }
+    LaunchedEffect(oauthConsentIntent) {
+        val pi = oauthConsentIntent ?: return@LaunchedEffect
+        runCatching {
+            oauthLauncher.launch(IntentSenderRequest.Builder(pi.intentSender).build())
+        }.onFailure { viewModel.clearOAuthConsentIntent() }
     }
 
     Scaffold(
@@ -230,6 +261,138 @@ fun ProjectEditScreen(
                         onCheckedChange = { viewModel.updateIsSecret(it) }
                     )
                 }
+            }
+
+            HorizontalDivider()
+
+            DataSourcesSection(
+                isNew = isNew,
+                tools = tools,
+                onAdd = { viewModel.openAddTool() },
+                onEdit = { viewModel.openEditTool(it) },
+                onDelete = { viewModel.deleteTool(it) }
+            )
+        }
+
+        if (editorOpen) {
+            val draft = editingTool
+            if (draft != null) {
+                AppScriptToolEditDialog(
+                    initial = draft,
+                    googleSignedIn = googleSignedIn,
+                    googleAccount = googleAccount,
+                    googleConfigured = viewModel.googleWebClientConfigured,
+                    testResult = testCallResult,
+                    onDismiss = { viewModel.closeEditor(); viewModel.clearTestCallResult() },
+                    onSave = { name, description, argSchemaHint, authMode, webAppUrl, scriptId, functionName, enabled, secretInput ->
+                        viewModel.saveEditingTool(
+                            name = name,
+                            description = description,
+                            argSchemaHint = argSchemaHint,
+                            authMode = authMode,
+                            webAppUrl = webAppUrl,
+                            scriptId = scriptId,
+                            functionName = functionName,
+                            enabled = enabled,
+                            secretInput = secretInput
+                        )
+                        viewModel.clearTestCallResult()
+                    },
+                    onTest = { secretOverride ->
+                        // Build a transient tool from the live draft so the user can test
+                        // before saving. The VM uses whatever's been edited in-memory.
+                        val live = draft.copy()  // current edits live in dialog state, but VM only
+                                                 // needs id + auth fields for resolving secret.
+                        viewModel.testCall(live, secretInputOverride = secretOverride)
+                    },
+                    onClearTest = { viewModel.clearTestCallResult() },
+                    onConnectGoogle = { viewModel.connectGoogle() },
+                    onDisconnectGoogle = { viewModel.disconnectGoogle() }
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun DataSourcesSection(
+    isNew: Boolean,
+    tools: List<AppScriptTool>,
+    onAdd: () -> Unit,
+    onEdit: (AppScriptTool) -> Unit,
+    onDelete: (AppScriptTool) -> Unit
+) {
+    Text("Data sources", style = MaterialTheme.typography.titleSmall)
+    Text(
+        "Tools the AI can call to read live data from your Google Apps Script projects. " +
+            "Each tool is a deployed Web App or a function in a script you own.",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant
+    )
+    if (isNew) {
+        Text(
+            "Save the project first to add data sources.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        return
+    }
+    tools.forEach { tool ->
+        AppScriptToolRow(tool = tool, onEdit = { onEdit(tool) }, onDelete = { onDelete(tool) })
+    }
+    OutlinedButton(onClick = onAdd, modifier = Modifier.fillMaxWidth()) {
+        Text("+ Add data source")
+    }
+}
+
+@Composable
+private fun AppScriptToolRow(
+    tool: AppScriptTool,
+    onEdit: () -> Unit,
+    onDelete: () -> Unit
+) {
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                Text(
+                    tool.name,
+                    style = MaterialTheme.typography.titleSmall,
+                    fontFamily = FontFamily.Monospace,
+                    modifier = Modifier.weight(1f)
+                )
+                AssistChip(
+                    onClick = {},
+                    label = {
+                        Text(when (tool.authMode) {
+                            AppScriptAuthMode.SHARED_SECRET -> "Web App"
+                            AppScriptAuthMode.OAUTH -> "OAuth"
+                        })
+                    }
+                )
+                if (!tool.enabled) {
+                    Spacer(Modifier.width(4.dp))
+                    AssistChip(onClick = {}, label = { Text("Off") })
+                }
+            }
+            if (tool.description.isNotBlank()) {
+                Text(
+                    tool.description,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 2
+                )
+            }
+            if (tool.authMode == AppScriptAuthMode.SHARED_SECRET && tool.secretRef == null && tool.webAppUrl.isNotBlank()) {
+                Text(
+                    "Secret needed on this device — open to enter it.",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.error
+                )
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                Spacer(Modifier.weight(1f))
+                IconButton(onClick = onEdit) { Icon(Icons.Default.Edit, "Edit") }
+                IconButton(onClick = onDelete) { Icon(Icons.Default.Delete, "Delete") }
             }
         }
     }
