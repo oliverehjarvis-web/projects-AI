@@ -8,6 +8,7 @@ import androidx.navigation.compose.composable
 import androidx.navigation.navArgument
 import com.oli.projectsai.ui.chat.ChatScreen
 import com.oli.projectsai.ui.home.HomeScreen
+import com.oli.projectsai.ui.linkedin.LinkedInScreen
 import com.oli.projectsai.ui.memory.MemoryScreen
 import com.oli.projectsai.ui.privacy.PinSetupScreen
 import com.oli.projectsai.ui.privacy.PrivacyUnlockScreen
@@ -35,6 +36,7 @@ object Routes {
     const val TRANSCRIPTION = "transcription"
     const val LONG_TRANSCRIPTION = "transcription/long"
     const val REPO_BROWSER = "repo/browse"
+    const val LINKEDIN = "linkedin"
     const val PRIVATE_GATE = "private/gate"
     const val PRIVATE_SETUP = "private/setup"
     const val PRIVATE_UNLOCK = "private/unlock"
@@ -57,7 +59,8 @@ fun ProjectsAINavGraph(navController: NavHostController) {
                 onNewProject = { navController.navigate(Routes.projectEdit()) },
                 onNewChat = { projectId -> navController.navigate(Routes.newChat(projectId)) },
                 onSettingsClick = { navController.navigate(Routes.SETTINGS) },
-                onTranscribeClick = { navController.navigate(Routes.TRANSCRIPTION) }
+                onTranscribeClick = { navController.navigate(Routes.TRANSCRIPTION) },
+                onLinkedInClick = { navController.navigate(Routes.LINKEDIN) }
             )
         }
 
@@ -122,8 +125,13 @@ fun ProjectsAINavGraph(navController: NavHostController) {
                 onNavigateBack = { navController.popBackStack() },
                 onModelManagement = { navController.navigate(Routes.MODEL_MANAGEMENT) },
                 onGlobalContext = { navController.navigate(Routes.GLOBAL_CONTEXT) },
-                onPrivate = { navController.navigate(Routes.PRIVATE_GATE) }
+                onPrivate = { navController.navigate(Routes.PRIVATE_GATE) },
+                onLinkedIn = { navController.navigate(Routes.LINKEDIN) }
             )
+        }
+
+        composable(Routes.LINKEDIN) {
+            LinkedInScreen(onNavigateBack = { navController.popBackStack() })
         }
 
         composable(Routes.PRIVATE_GATE) {

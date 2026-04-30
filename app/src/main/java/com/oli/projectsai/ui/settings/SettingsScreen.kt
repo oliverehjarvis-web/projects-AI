@@ -27,6 +27,7 @@ fun SettingsScreen(
     onModelManagement: () -> Unit,
     onGlobalContext: () -> Unit,
     onPrivate: () -> Unit,
+    onLinkedIn: () -> Unit,
     viewModel: SettingsViewModel = hiltViewModel()
 ) {
     var aboutTapCount by remember { mutableStateOf(0) }
@@ -152,6 +153,13 @@ fun SettingsScreen(
                 onDefaultRepoChange = { viewModel.setGithubDefaultRepo(it) },
                 onTestConnection = { viewModel.testGithubConnection() },
                 onDismissTestState = { viewModel.dismissGithubTestState() }
+            )
+
+            ListItem(
+                headlineContent = { Text("LinkedIn agent") },
+                supportingContent = { Text("Scrape your feed and get AI-drafted interactions to approve.") },
+                leadingContent = { Icon(Icons.Default.Group, null) },
+                modifier = Modifier.clickable(onClick = onLinkedIn)
             )
 
             HorizontalDivider()

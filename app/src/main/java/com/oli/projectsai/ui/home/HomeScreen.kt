@@ -28,6 +28,7 @@ fun HomeScreen(
     onNewChat: (Long) -> Unit,
     onSettingsClick: () -> Unit,
     onTranscribeClick: () -> Unit,
+    onLinkedInClick: () -> Unit,
     viewModel: HomeViewModel = hiltViewModel()
 ) {
     val projects by viewModel.projects.collectAsStateWithLifecycle()
@@ -40,6 +41,9 @@ fun HomeScreen(
                 title = { Text("Projects AI") },
                 actions = {
                     ModelStatusChip(modelState)
+                    IconButton(onClick = onLinkedInClick) {
+                        Icon(Icons.Default.Group, contentDescription = "LinkedIn")
+                    }
                     IconButton(onClick = onTranscribeClick) {
                         Icon(Icons.Default.Mic, contentDescription = "Transcribe")
                     }
