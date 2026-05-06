@@ -1,4 +1,4 @@
-import { apiFetch } from "./client";
+import { apiJson } from "./client";
 
 export interface ServerInfo {
   ram_total_gb: number;
@@ -7,10 +7,9 @@ export interface ServerInfo {
   kv_per_token_kb?: number;
 }
 
-export async function fetchServerInfo(model?: string): Promise<ServerInfo> {
+export function fetchServerInfo(model?: string): Promise<ServerInfo> {
   const q = model ? `?model=${encodeURIComponent(model)}` : "";
-  const r = await apiFetch(`/v1/server_info${q}`);
-  return r.json();
+  return apiJson<ServerInfo>(`/v1/server_info${q}`);
 }
 
 const PICKER_STEPS = [2048, 4096, 8192, 16384, 32768, 65536, 131072];

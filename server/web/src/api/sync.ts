@@ -1,4 +1,4 @@
-import { apiFetch } from "./client";
+import { apiJson } from "./client";
 
 export interface Project {
   remote_id: string;
@@ -47,30 +47,66 @@ export interface QuickAction {
   deleted_at: number | null;
 }
 
-export async function fetchProjects(): Promise<Project[]> {
-  const r = await apiFetch("/v1/sync/projects?since=0");
-  return r.json();
+type SyncEntity = "projects" | "chats" | "messages" | "quick_actions";
+
+interface PutResult {
+  accepted: number;
+  remote_ids: string[];
 }
 
-export async function fetchChats(projectRemoteId: string): Promise<Chat[]> {
-  const r = await apiFetch(`/v1/sync/chats?since=0&project_remote_id=${projectRemoteId}`);
-  return r.json();
-}
-
-export async function fetchMessages(chatRemoteId: string): Promise<Message[]> {
-  const r = await apiFetch(`/v1/sync/messages?since=0&chat_remote_id=${chatRemoteId}`);
-  return r.json();
-}
-
-export async function pushMessage(msg: Omit<Message, "remote_id">): Promise<string> {
-  const now = Date.now();
-  const item = { ...msg, remote_id: null, updated_at: now };
-  const r = await apiFetch("/v1/sync/messages", {
+/** Single-item PUT against a sync endpoint. Server returns the assigned remote_ids. */
+async function mutateEntity<T>(entity: SyncEntity, item: T): Promise<PutResult> {
+  return apiJson<PutResult>(`/v1/sync/${entity}`, {
     method: "PUT",
     body: JSON.stringify({ items: [item] }),
   });
-  const data = await r.json();
-  return data.remote_ids[0] as string;
+}
+
+// ── Reads ───────────────────────────────────────────────────────────────────
+
+export function fetchProjects(): Promise<Project[]> {
+  return apiJson<Project[]>("/v1/sync/projects?since=0");
+}
+
+export function fetchChats(projectRemoteId: string): Promise<Chat[]> {
+  return apiJson<Chat[]>(`/v1/sync/chats?since=0&project_remote_id=${projectRemoteId}`);
+}
+
+export function fetchMessages(chatRemoteId: string): Promise<Message[]> {
+  return apiJson<Message[]>(`/v1/sync/messages?since=0&chat_remote_id=${chatRemoteId}`);
+}
+
+export function fetchQuickActions(projectRemoteId: string): Promise<QuickAction[]> {
+  return apiJson<QuickAction[]>(`/v1/sync/quick_actions?since=0&project_remote_id=${projectRemoteId}`);
+}
+
+export interface SyncFullResult {
+  projects: Project[];
+  chats: Chat[];
+  messages: Message[];
+  quick_actions: QuickAction[];
+}
+
+export async function syncFull(since: number): Promise<SyncFullResult> {
+  const data = await apiJson<Partial<SyncFullResult>>(`/v1/sync/full?since=${since}`);
+  return {
+    projects: data.projects ?? [],
+    chats: data.chats ?? [],
+    messages: data.messages ?? [],
+    quick_actions: data.quick_actions ?? [],
+  };
+}
+
+export function checkHealth(): Promise<{ status: string; ollama: string }> {
+  return apiJson<{ status: string; ollama: string }>("/v1/health");
+}
+
+// ── Writes ──────────────────────────────────────────────────────────────────
+
+export async function pushMessage(msg: Omit<Message, "remote_id">): Promise<string> {
+  const item = { ...msg, remote_id: null, updated_at: Date.now() };
+  const r = await mutateEntity("messages", item);
+  return r.remote_ids[0];
 }
 
 export async function createProject(name: string, description: string): Promise<Project> {
@@ -90,12 +126,8 @@ export async function createProject(name: string, description: string): Promise<
     updated_at: now,
     deleted_at: null,
   };
-  const r = await apiFetch("/v1/sync/projects", {
-    method: "PUT",
-    body: JSON.stringify({ items: [item] }),
-  });
-  const data = await r.json();
-  return { ...item, remote_id: data.remote_ids[0] } as Project;
+  const r = await mutateEntity("projects", item);
+  return { ...item, remote_id: r.remote_ids[0] } as Project;
 }
 
 export async function createChat(projectRemoteId: string, title = "New Chat"): Promise<Chat> {
@@ -109,111 +141,48 @@ export async function createChat(projectRemoteId: string, title = "New Chat"): P
     updated_at: now,
     deleted_at: null,
   };
-  const r = await apiFetch("/v1/sync/chats", {
-    method: "PUT",
-    body: JSON.stringify({ items: [item] }),
-  });
-  const data = await r.json();
-  return { ...item, remote_id: data.remote_ids[0] } as Chat;
+  const r = await mutateEntity("chats", item);
+  return { ...item, remote_id: r.remote_ids[0] } as Chat;
 }
 
 export async function updateChat(chat: Chat): Promise<void> {
-  const now = Date.now();
-  const item = { ...chat, updated_at: now };
-  await apiFetch("/v1/sync/chats", {
-    method: "PUT",
-    body: JSON.stringify({ items: [item] }),
-  });
+  await mutateEntity("chats", { ...chat, updated_at: Date.now() });
 }
 
 export async function deleteChat(chat: Chat): Promise<void> {
   const now = Date.now();
-  const item = { ...chat, updated_at: now, deleted_at: now };
-  await apiFetch("/v1/sync/chats", {
-    method: "PUT",
-    body: JSON.stringify({ items: [item] }),
-  });
+  await mutateEntity("chats", { ...chat, updated_at: now, deleted_at: now });
 }
 
 export async function updateProject(project: Project): Promise<void> {
-  const now = Date.now();
-  const item = { ...project, updated_at: now };
-  await apiFetch("/v1/sync/projects", {
-    method: "PUT",
-    body: JSON.stringify({ items: [item] }),
-  });
+  await mutateEntity("projects", { ...project, updated_at: Date.now() });
 }
 
 export async function deleteProject(project: Project): Promise<void> {
   const now = Date.now();
-  const item = { ...project, updated_at: now, deleted_at: now };
-  await apiFetch("/v1/sync/projects", {
-    method: "PUT",
-    body: JSON.stringify({ items: [item] }),
-  });
-}
-
-export async function checkHealth(): Promise<{ status: string; ollama: string }> {
-  const r = await apiFetch("/v1/health");
-  return r.json();
-}
-
-export interface SyncFullResult {
-  projects: Project[];
-  chats: Chat[];
-  messages: Message[];
-  quick_actions: QuickAction[];
-}
-
-export async function syncFull(since: number): Promise<SyncFullResult> {
-  const r = await apiFetch(`/v1/sync/full?since=${since}`);
-  const data = await r.json();
-  return {
-    projects: data.projects ?? [],
-    chats: data.chats ?? [],
-    messages: data.messages ?? [],
-    quick_actions: data.quick_actions ?? [],
-  };
-}
-
-export async function fetchQuickActions(projectRemoteId: string): Promise<QuickAction[]> {
-  const r = await apiFetch(`/v1/sync/quick_actions?since=0&project_remote_id=${projectRemoteId}`);
-  return r.json();
+  await mutateEntity("projects", { ...project, updated_at: now, deleted_at: now });
 }
 
 export async function upsertQuickAction(
   qa: Omit<QuickAction, "remote_id"> & { remote_id?: string | null },
 ): Promise<QuickAction> {
-  const now = Date.now();
-  const item = { ...qa, remote_id: qa.remote_id ?? null, updated_at: now };
-  const r = await apiFetch("/v1/sync/quick_actions", {
-    method: "PUT",
-    body: JSON.stringify({ items: [item] }),
-  });
-  const data = await r.json();
-  return { ...item, remote_id: qa.remote_id ?? data.remote_ids[0] } as QuickAction;
+  const item = { ...qa, remote_id: qa.remote_id ?? null, updated_at: Date.now() };
+  const r = await mutateEntity("quick_actions", item);
+  return { ...item, remote_id: qa.remote_id ?? r.remote_ids[0] } as QuickAction;
 }
 
 export async function deleteQuickAction(qa: QuickAction): Promise<void> {
   const now = Date.now();
-  await apiFetch("/v1/sync/quick_actions", {
-    method: "PUT",
-    body: JSON.stringify({ items: [{ ...qa, updated_at: now, deleted_at: now }] }),
-  });
+  await mutateEntity("quick_actions", { ...qa, updated_at: now, deleted_at: now });
 }
 
 /** Soft-delete a single message (for regenerate). */
 export async function deleteMessage(msg: Message): Promise<void> {
   const now = Date.now();
-  await apiFetch("/v1/sync/messages", {
-    method: "PUT",
-    body: JSON.stringify({
-      items: [{
-        ...msg,
-        updated_at: now,
-        deleted_at: now,
-        attachment_paths: "",
-      }],
-    }),
+  await mutateEntity("messages", {
+    ...msg,
+    updated_at: now,
+    deleted_at: now,
+    attachment_paths: "",
   });
 }

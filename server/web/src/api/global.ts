@@ -1,4 +1,4 @@
-import { apiFetch } from "./client";
+import { apiJson } from "./client";
 
 export interface GlobalContext {
   user_name: string;
@@ -6,15 +6,15 @@ export interface GlobalContext {
   updated_at: number;
 }
 
-export async function fetchGlobalContext(): Promise<GlobalContext> {
-  const r = await apiFetch("/v1/global_context");
-  return r.json();
+export function fetchGlobalContext(): Promise<GlobalContext> {
+  return apiJson<GlobalContext>("/v1/global_context");
 }
 
-export async function saveGlobalContext(ctx: Pick<GlobalContext, "user_name" | "rules">): Promise<GlobalContext> {
-  const r = await apiFetch("/v1/global_context", {
+export function saveGlobalContext(
+  ctx: Pick<GlobalContext, "user_name" | "rules">,
+): Promise<GlobalContext> {
+  return apiJson<GlobalContext>("/v1/global_context", {
     method: "PUT",
     body: JSON.stringify(ctx),
   });
-  return r.json();
 }

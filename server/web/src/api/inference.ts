@@ -1,4 +1,5 @@
 import { apiFetch } from "./client";
+import { parseSseStream } from "./sse";
 import type { Message } from "./sync";
 
 export interface GenerateOptions {
@@ -41,32 +42,17 @@ export async function streamGenerate(
     signal,
   });
 
-  if (!response.body) throw new Error("No response body");
-
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = "";
-
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
-    const lines = buffer.split("\n");
-    buffer = lines.pop() ?? "";
-    for (const line of lines) {
-      if (!line.startsWith("data: ")) continue;
-      const payload = line.slice(6);
-      if (payload === "[DONE]") {
-        onDone();
-        return;
-      }
-      try {
-        const obj = JSON.parse(payload) as { token?: string; error?: string };
-        if (obj.error) throw new Error(obj.error);
-        if (obj.token) onToken(obj.token);
-      } catch (e) {
-        if (e instanceof Error && e.message) throw e;
-      }
+  for await (const payload of parseSseStream(response)) {
+    if (payload === "[DONE]") {
+      onDone();
+      return;
+    }
+    try {
+      const obj = JSON.parse(payload) as { token?: string; error?: string };
+      if (obj.error) throw new Error(obj.error);
+      if (obj.token) onToken(obj.token);
+    } catch (e) {
+      if (e instanceof Error && e.message) throw e;
     }
   }
   onDone();
