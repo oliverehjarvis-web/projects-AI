@@ -3,12 +3,10 @@ package com.oli.projectsai.data.preferences
 import android.content.Context
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
-import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.map
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -30,25 +28,13 @@ enum class SearchDepth {
 @Singleton
 class SearchSettings @Inject constructor(
     @ApplicationContext context: Context
-) {
-    private val store = context.searchSettingsDataStore
+) : SettingsStore(context.searchSettingsDataStore) {
 
-    val searxngUrl: Flow<String> = store.data.map { it[KEY_SEARXNG_URL].orEmpty() }
+    val searxngUrl: Flow<String> = stringFlow(KEY_SEARXNG_URL)
+    val searchDepth: Flow<SearchDepth> = enumFlow(KEY_SEARCH_DEPTH, default = SearchDepth.AUTO_FETCH)
 
-    val searchDepth: Flow<SearchDepth> = store.data.map {
-        when (it[KEY_SEARCH_DEPTH]) {
-            SearchDepth.TOOL_LOOP.name -> SearchDepth.TOOL_LOOP
-            else -> SearchDepth.AUTO_FETCH
-        }
-    }
-
-    suspend fun setSearxngUrl(value: String) {
-        store.edit { it[KEY_SEARXNG_URL] = value.trim().trimEnd('/') }
-    }
-
-    suspend fun setSearchDepth(value: SearchDepth) {
-        store.edit { it[KEY_SEARCH_DEPTH] = value.name }
-    }
+    suspend fun setSearxngUrl(value: String) = set(KEY_SEARXNG_URL, value.trim().trimEnd('/'))
+    suspend fun setSearchDepth(value: SearchDepth) = setEnum(KEY_SEARCH_DEPTH, value)
 
     private companion object {
         val KEY_SEARXNG_URL = stringPreferencesKey("searxng_url")
