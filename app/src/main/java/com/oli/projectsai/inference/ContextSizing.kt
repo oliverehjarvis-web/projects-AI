@@ -3,13 +3,13 @@ package com.oli.projectsai.inference
 import android.app.ActivityManager
 import android.content.Context
 import com.oli.projectsai.data.preferences.RemoteSettings
+import com.oli.projectsai.net.HttpClient
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
-import java.net.HttpURLConnection
-import java.net.URL
+import java.net.URLEncoder
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -24,7 +24,8 @@ import javax.inject.Singleton
 @Singleton
 class ContextSizing @Inject constructor(
     @ApplicationContext private val context: Context,
-    private val remoteSettings: RemoteSettings
+    private val remoteSettings: RemoteSettings,
+    private val httpClient: HttpClient
 ) {
     companion object {
         // Picker steps that the project-edit UI exposes. Auto-pick snaps down to one of these.
@@ -115,20 +116,15 @@ class ContextSizing @Inject constructor(
     private suspend fun fetchServerInfo(modelName: String): JSONObject? {
         val url = remoteSettings.serverUrl.first().ifBlank { return null }
         val token = remoteSettings.apiToken.first()
+        val encoded = URLEncoder.encode(modelName, "UTF-8")
         return runCatching {
-            val encoded = java.net.URLEncoder.encode(modelName, "UTF-8")
-            val conn = (URL("$url/v1/server_info?model=$encoded").openConnection() as HttpURLConnection).apply {
-                requestMethod = "GET"
-                connectTimeout = 5_000
-                readTimeout = 5_000
-                if (token.isNotBlank()) setRequestProperty("Authorization", "Bearer $token")
-            }
-            try {
-                if (conn.responseCode != 200) return@runCatching null
-                JSONObject(conn.inputStream.bufferedReader().use { it.readText() })
-            } finally {
-                conn.disconnect()
-            }
+            val body = httpClient.get(
+                url = "$url/v1/server_info?model=$encoded",
+                bearer = token.takeIf { it.isNotBlank() },
+                connectTimeoutMs = 5_000,
+                readTimeoutMs = 5_000
+            )
+            JSONObject(body)
         }.getOrNull()
     }
 }

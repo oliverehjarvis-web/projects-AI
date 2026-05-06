@@ -19,22 +19,22 @@ import com.oli.projectsai.data.update.UpdateChecker
 import com.oli.projectsai.data.update.UpdateInfo
 import com.oli.projectsai.inference.InferenceManager
 import com.oli.projectsai.inference.ModelState
+import com.oli.projectsai.net.HttpClient
+import com.oli.projectsai.net.HttpError
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
-import java.io.BufferedReader
 import java.io.File
-import java.io.InputStreamReader
 import javax.inject.Inject
 
 sealed class SyncState {
@@ -72,7 +72,8 @@ class SettingsViewModel @Inject constructor(
     private val voiceSettings: VoiceSettings,
     private val githubSettings: GitHubSettings,
     private val githubClient: GitHubClient,
-    private val syncRepository: SyncRepository
+    private val syncRepository: SyncRepository,
+    private val httpClient: HttpClient
 ) : ViewModel() {
 
     companion object {
@@ -190,38 +191,28 @@ class SettingsViewModel @Inject constructor(
     fun fetchRemoteModels(url: String, token: String) {
         if (url.isBlank() || token.isBlank()) return
         viewModelScope.launch {
-            withContext(Dispatchers.IO) {
-                var conn: java.net.HttpURLConnection? = null
-                try {
-                    conn = (java.net.URL("${url.trimEnd('/')}/v1/models").openConnection()
-                            as java.net.HttpURLConnection).apply {
-                        requestMethod = "GET"
-                        connectTimeout = 10_000
-                        readTimeout = 10_000
-                        setRequestProperty("Authorization", "Bearer $token")
-                    }
-                    val code = conn.responseCode
-                    if (code != 200) {
-                        _remoteError.value = "Server returned HTTP $code when listing models."
-                        return@withContext
-                    }
-                    val body = conn.inputStream.bufferedReader().readText()
-                    val catalogue = org.json.JSONObject(body).getJSONArray("catalogue")
-                    _remoteModels.value = (0 until catalogue.length()).map { i ->
-                        val m = catalogue.getJSONObject(i)
-                        RemoteModel(
-                            id = m.getString("id"),
-                            label = m.getString("label"),
-                            sizeGb = m.getDouble("size_gb"),
-                            installed = m.getBoolean("installed")
-                        )
-                    }.sortedWith(compareByDescending<RemoteModel> { it.installed }.thenBy { it.label })
-                    _remoteError.value = null
-                } catch (t: Throwable) {
-                    _remoteError.value = t.message ?: "Failed to fetch models"
-                } finally {
-                    conn?.disconnect()
-                }
+            try {
+                val body = httpClient.get(
+                    url = "${url.trimEnd('/')}/v1/models",
+                    bearer = token,
+                    connectTimeoutMs = 10_000,
+                    readTimeoutMs = 10_000
+                )
+                val catalogue = org.json.JSONObject(body).getJSONArray("catalogue")
+                _remoteModels.value = (0 until catalogue.length()).map { i ->
+                    val m = catalogue.getJSONObject(i)
+                    RemoteModel(
+                        id = m.getString("id"),
+                        label = m.getString("label"),
+                        sizeGb = m.getDouble("size_gb"),
+                        installed = m.getBoolean("installed")
+                    )
+                }.sortedWith(compareByDescending<RemoteModel> { it.installed }.thenBy { it.label })
+                _remoteError.value = null
+            } catch (e: HttpError.Status) {
+                _remoteError.value = "Server returned HTTP ${e.code} when listing models."
+            } catch (t: Throwable) {
+                _remoteError.value = t.message ?: "Failed to fetch models"
             }
         }
     }
@@ -242,53 +233,47 @@ class SettingsViewModel @Inject constructor(
                 return@launch
             }
             _pullState.value = PullState(modelId, "Starting…", null)
-            withContext(Dispatchers.IO) {
-                var conn: java.net.HttpURLConnection? = null
-                try {
-                    val encoded = java.net.URLEncoder.encode(modelId, "UTF-8").replace("+", "%20")
-                    conn = (java.net.URL("$url/v1/models/pull/$encoded").openConnection()
-                            as java.net.HttpURLConnection).apply {
-                        requestMethod = "POST"
-                        connectTimeout = 10_000
-                        readTimeout = 0 // server streams indefinitely until done
-                        setRequestProperty("Authorization", "Bearer $token")
-                        setRequestProperty("Accept", "text/event-stream")
-                        doOutput = false
-                    }
-                    if (conn.responseCode != 200) {
-                        _pullState.value = PullState(modelId, "", null, done = true,
-                            error = "Server returned HTTP ${conn.responseCode}")
-                        return@withContext
-                    }
-                    BufferedReader(InputStreamReader(conn.inputStream)).use { reader ->
-                        while (true) {
-                            val line = reader.readLine() ?: break
-                            if (!line.startsWith("data:")) continue
-                            val payload = line.removePrefix("data:").trim()
-                            if (payload.isEmpty()) continue
-                            val obj = runCatching { org.json.JSONObject(payload) }.getOrNull() ?: continue
-                            val status = obj.optString("status", "")
-                            val progress = if (obj.isNull("progress")) null else obj.optInt("progress")
-                            val error = obj.optString("error", "").ifBlank { null }
-                            if (error != null) {
-                                _pullState.value = PullState(modelId, status, progress, done = true, error = error)
-                                return@withContext
-                            }
-                            if (status == "done") {
-                                _pullState.value = PullState(modelId, "Done", 100, done = true)
-                                return@withContext
-                            }
-                            _pullState.value = PullState(modelId, status, progress)
+            val encoded = java.net.URLEncoder.encode(modelId, "UTF-8").replace("+", "%20")
+            try {
+                var sawDone = false
+                httpClient.streamLines(
+                    url = "$url/v1/models/pull/$encoded",
+                    method = "POST",
+                    bearer = token,
+                    connectTimeoutMs = 10_000,
+                    readTimeoutMs = 0, // server streams indefinitely until done
+                    headers = mapOf("Accept" to "text/event-stream")
+                )
+                    .filter { it.startsWith("data:") }
+                    .collect { line ->
+                        if (sawDone) return@collect
+                        val payload = line.removePrefix("data:").trim()
+                        if (payload.isEmpty()) return@collect
+                        val obj = runCatching { org.json.JSONObject(payload) }.getOrNull() ?: return@collect
+                        val status = obj.optString("status", "")
+                        val progress = if (obj.isNull("progress")) null else obj.optInt("progress")
+                        val error = obj.optString("error", "").ifBlank { null }
+                        if (error != null) {
+                            _pullState.value = PullState(modelId, status, progress, done = true, error = error)
+                            sawDone = true
+                            return@collect
                         }
-                        // Stream ended without explicit done.
-                        _pullState.value = PullState(modelId, "Done", 100, done = true)
+                        if (status == "done") {
+                            _pullState.value = PullState(modelId, "Done", 100, done = true)
+                            sawDone = true
+                            return@collect
+                        }
+                        _pullState.value = PullState(modelId, status, progress)
                     }
-                } catch (t: Throwable) {
-                    _pullState.value = PullState(modelId, "", null, done = true,
-                        error = t.message ?: "Pull failed")
-                } finally {
-                    conn?.disconnect()
+                if (!sawDone) {
+                    _pullState.value = PullState(modelId, "Done", 100, done = true)
                 }
+            } catch (e: HttpError.Status) {
+                _pullState.value = PullState(modelId, "", null, done = true,
+                    error = "Server returned HTTP ${e.code}")
+            } catch (t: Throwable) {
+                _pullState.value = PullState(modelId, "", null, done = true,
+                    error = t.message ?: "Pull failed")
             }
             // On success, refresh catalogue and auto-select if nothing chosen yet.
             if (_pullState.value?.error == null) {

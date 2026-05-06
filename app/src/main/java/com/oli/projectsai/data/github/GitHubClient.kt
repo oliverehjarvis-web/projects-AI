@@ -1,12 +1,12 @@
 package com.oli.projectsai.data.github
 
 import com.oli.projectsai.data.preferences.GitHubSettings
+import com.oli.projectsai.net.HttpClient
+import com.oli.projectsai.net.HttpError
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
-import java.net.HttpURLConnection
-import java.net.URL
 import java.net.URLEncoder
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -16,12 +16,11 @@ import javax.inject.Singleton
  *  - [listRepos]  — what repos can the user pick from
  *  - [tree]       — full directory listing for a repo at a ref
  *  - [file]       — raw bytes of a single file at a ref
- *
- * No new HTTP dependency: stays on plain HttpURLConnection like the rest of the app.
  */
 @Singleton
 class GitHubClient @Inject constructor(
-    private val settings: GitHubSettings
+    private val settings: GitHubSettings,
+    private val httpClient: HttpClient
 ) {
 
     data class Repo(
@@ -125,28 +124,24 @@ class GitHubClient @Inject constructor(
     private suspend fun get(path: String): String {
         val pat = settings.pat.first()
         if (pat.isBlank()) throw GitHubError("No GitHub PAT configured. Set one in Settings → GitHub.")
-        val conn = (URL("$BASE_URL$path").openConnection() as HttpURLConnection).apply {
-            requestMethod = "GET"
-            connectTimeout = 10_000
-            readTimeout = 30_000
-            setRequestProperty("Authorization", "Bearer $pat")
-            setRequestProperty("Accept", "application/vnd.github+json")
-            setRequestProperty("X-GitHub-Api-Version", "2022-11-28")
-            setRequestProperty("User-Agent", "ProjectsAI-Android")
-        }
-        try {
-            val code = conn.responseCode
-            if (code !in 200..299) {
-                val errBody = runCatching { conn.errorStream?.bufferedReader()?.use { it.readText() } }.getOrNull().orEmpty()
-                val message = runCatching { JSONObject(errBody).optString("message") }.getOrNull().orEmpty()
-                throw GitHubError(
-                    "GitHub $code on $path${if (message.isNotBlank()) ": $message" else ""}",
-                    statusCode = code
+        return try {
+            httpClient.get(
+                url = "$BASE_URL$path",
+                bearer = pat,
+                connectTimeoutMs = 10_000,
+                readTimeoutMs = 30_000,
+                headers = mapOf(
+                    "Accept" to "application/vnd.github+json",
+                    "X-GitHub-Api-Version" to "2022-11-28",
+                    "User-Agent" to "ProjectsAI-Android"
                 )
-            }
-            return conn.inputStream.bufferedReader().use { it.readText() }
-        } finally {
-            conn.disconnect()
+            )
+        } catch (e: HttpError.Status) {
+            val message = runCatching { JSONObject(e.body).optString("message") }.getOrNull().orEmpty()
+            throw GitHubError(
+                "GitHub ${e.code} on $path${if (message.isNotBlank()) ": $message" else ""}",
+                statusCode = e.code
+            )
         }
     }
 

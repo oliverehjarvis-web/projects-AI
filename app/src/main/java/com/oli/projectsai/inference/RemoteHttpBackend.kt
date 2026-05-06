@@ -1,32 +1,27 @@
 package com.oli.projectsai.inference
 
+import android.util.Base64
 import com.oli.projectsai.data.preferences.RemoteSettings
 import com.oli.projectsai.di.ApplicationScope
+import com.oli.projectsai.net.HttpClient
+import com.oli.projectsai.net.HttpError
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.InternalCoroutinesApi
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.flow.flow
-import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.onEach
-import kotlinx.coroutines.withContext
-import android.util.Base64
+import kotlinx.coroutines.flow.takeWhile
+import kotlinx.coroutines.flow.transform
 import org.json.JSONArray
 import org.json.JSONObject
-import java.io.BufferedReader
-import java.io.InputStreamReader
-import java.net.HttpURLConnection
-import java.net.URL
 import javax.inject.Inject
 import javax.inject.Singleton
 
 @Singleton
 class RemoteHttpBackend @Inject constructor(
     private val remoteSettings: RemoteSettings,
+    private val httpClient: HttpClient,
     @ApplicationScope private val scope: CoroutineScope
 ) : InferenceBackend {
 
@@ -61,27 +56,19 @@ class RemoteHttpBackend @Inject constructor(
             throw InferenceError.LoadFailed(IllegalStateException("Server URL not configured"))
         }
         val token = remoteSettings.apiToken.first()
-        withContext(Dispatchers.IO) {
-            val conn = (URL("$url/v1/health").openConnection() as HttpURLConnection).apply {
-                requestMethod = "GET"
-                connectTimeout = 10_000
-                readTimeout = 10_000
-                setRequestProperty("Authorization", "Bearer $token")
-            }
-            try {
-                val code = conn.responseCode
-                if (code != 200) {
-                    throw InferenceError.LoadFailed(
-                        IllegalStateException("Health check failed: HTTP $code${readErrorDetail(conn)}")
-                    )
-                }
-            } catch (ie: InferenceError) {
-                throw ie
-            } catch (t: Throwable) {
-                throw InferenceError.LoadFailed(t)
-            } finally {
-                conn.disconnect()
-            }
+        try {
+            httpClient.get(
+                url = "$url/v1/health",
+                bearer = token,
+                connectTimeoutMs = 10_000,
+                readTimeoutMs = 10_000
+            )
+        } catch (e: HttpError.Status) {
+            throw InferenceError.LoadFailed(
+                IllegalStateException("Health check failed: HTTP ${e.code}${formatErrorBody(e.body)}")
+            )
+        } catch (e: HttpError) {
+            throw InferenceError.LoadFailed(e)
         }
         _isLoaded = true
     }
@@ -90,7 +77,6 @@ class RemoteHttpBackend @Inject constructor(
         _isLoaded = false
     }
 
-    @OptIn(InternalCoroutinesApi::class)
     override suspend fun generate(
         systemPrompt: String,
         messages: List<ChatMessage>,
@@ -141,71 +127,51 @@ class RemoteHttpBackend @Inject constructor(
             })
         }.toString()
 
-        return flow {
-            val conn = (URL("$url/v1/generate").openConnection() as HttpURLConnection).apply {
-                requestMethod = "POST"
-                connectTimeout = 15_000
-                // Idle timeout per read — a stalled stream raises SocketTimeoutException instead of
-                // hanging the client forever.
-                readTimeout = STREAM_IDLE_TIMEOUT_MS
-                doOutput = true
-                setRequestProperty("Content-Type", "application/json")
-                setRequestProperty("Accept", "text/event-stream")
-                setRequestProperty("Authorization", "Bearer $token")
-                outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
-            }
-            // BufferedReader.readLine() is a blocking syscall that job.cancel() cannot interrupt.
-            // Force-close the socket on cancellation so the read raises and the flow unwinds.
-            val cancelHook = currentCoroutineContext()[Job]?.invokeOnCompletion(onCancelling = true) {
-                runCatching { conn.disconnect() }
-            }
-            try {
-                val code = conn.responseCode
-                if (code != 200) {
-                    throw InferenceError.GenerationFailed(
-                        IllegalStateException("Server returned HTTP $code${readErrorDetail(conn)}")
-                    )
-                }
-                BufferedReader(InputStreamReader(conn.inputStream, Charsets.UTF_8)).use { reader ->
-                    var line: String?
-                    while (reader.readLine().also { line = it } != null) {
-                        val l = line ?: continue
-                        if (!l.startsWith("data: ")) continue
-                        val payload = l.removePrefix("data: ")
-                        if (payload == "[DONE]") return@flow
-                        try {
-                            val obj = JSONObject(payload)
-                            if (obj.has("error")) {
-                                throw InferenceError.GenerationFailed(
-                                    IllegalStateException(obj.getString("error"))
-                                )
-                            }
-                            if (obj.has("usage")) {
-                                val usage = obj.getJSONObject("usage")
-                                val ct = usage.optInt("completion_tokens", 0)
-                                if (ct > 0) _lastCompletionTokens = ct
-                            }
-                            val chunk = obj.optString("token", "")
-                            if (chunk.isNotEmpty()) emit(chunk)
-                        } catch (ie: InferenceError) {
-                            throw ie
-                        } catch (_: Exception) { /* skip malformed line */ }
+        return httpClient.streamLines(
+            url = "$url/v1/generate",
+            method = "POST",
+            body = body,
+            bearer = token,
+            connectTimeoutMs = 15_000,
+            readTimeoutMs = STREAM_IDLE_TIMEOUT_MS,
+            headers = mapOf("Accept" to "text/event-stream")
+        )
+            .takeWhile { line -> line.removePrefix("data: ") != "[DONE]" }
+            .transform { line ->
+                if (!line.startsWith("data: ")) return@transform
+                val payload = line.removePrefix("data: ")
+                try {
+                    val obj = JSONObject(payload)
+                    if (obj.has("error")) {
+                        throw InferenceError.GenerationFailed(
+                            IllegalStateException(obj.getString("error"))
+                        )
                     }
-                }
-            } catch (ie: InferenceError) {
-                throw ie
-            } catch (t: java.net.SocketTimeoutException) {
-                val mins = STREAM_IDLE_TIMEOUT_MS / 60_000
-                throw InferenceError.GenerationFailed(
-                    IllegalStateException("Remote server stopped responding (no data for ${mins} min).")
-                )
-            } catch (t: Throwable) {
-                throw InferenceError.GenerationFailed(t)
-            } finally {
-                cancelHook?.dispose()
-                conn.disconnect()
+                    if (obj.has("usage")) {
+                        val usage = obj.getJSONObject("usage")
+                        val ct = usage.optInt("completion_tokens", 0)
+                        if (ct > 0) _lastCompletionTokens = ct
+                    }
+                    val chunk = obj.optString("token", "")
+                    if (chunk.isNotEmpty()) emit(chunk)
+                } catch (ie: InferenceError) {
+                    throw ie
+                } catch (_: Exception) { /* skip malformed line */ }
             }
-        }.flowOn(Dispatchers.IO)
+            .catch { cause ->
+                throw when (cause) {
+                    is InferenceError -> cause
+                    is HttpError.Status -> InferenceError.GenerationFailed(
+                        IllegalStateException("Server returned HTTP ${cause.code}${formatErrorBody(cause.body)}")
+                    )
+                    is HttpError.Timeout -> InferenceError.GenerationFailed(
+                        IllegalStateException(
+                            "Remote server stopped responding (no data for ${STREAM_IDLE_TIMEOUT_MS / 60_000} min)."
+                        )
+                    )
+                    else -> InferenceError.GenerationFailed(cause)
+                }
+            }
     }
 
     override suspend fun transcribe(pcm16MonoBytes: ByteArray, promptOverride: String?): String {
@@ -221,10 +187,6 @@ class RemoteHttpBackend @Inject constructor(
         else (text.length / CHARS_PER_TOKEN).toInt().coerceAtLeast(1)
     }
 
-    private fun readErrorDetail(conn: HttpURLConnection): String =
-        runCatching { conn.errorStream?.bufferedReader()?.use { it.readText() } }
-            .getOrNull()
-            ?.takeIf { it.isNotBlank() }
-            ?.let { " — ${it.take(200)}" }
-            .orEmpty()
+    private fun formatErrorBody(body: String): String =
+        body.takeIf { it.isNotBlank() }?.let { " — ${it.take(200)}" }.orEmpty()
 }
