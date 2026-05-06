@@ -102,3 +102,24 @@ com.oli.projectsai/
 │   └── components/  - Reusable UI (token counter)
 └── di/              - Hilt dependency injection modules
 ```
+
+## Web ↔ Server type sharing
+
+The web client's wire types are generated from the server's Pydantic models. After
+adding or changing a model in `server/routers/sync.py` or `server/routers/inference.py`,
+regenerate `server/web/src/api/types.gen.ts`:
+
+```sh
+cd server/web && npm run gen-types
+```
+
+The script runs the generator inside `python:3.12-slim` (so contributors don't need a
+local Python 3.10+) and writes the result to `types.gen.ts`. Commit the regenerated
+file alongside the model change.
+
+The generated file contains the **wire-format** types — fields nullable exactly where
+Pydantic says they are. The hand-written `Project` / `Chat` / `Message` interfaces in
+`api/sync.ts` are the **domain** types: post-normalisation, `remote_id` is always
+`string` because the store only ever sees rows that have been written through the
+server. Use generated types when you're decoding a request body or wire payload; use
+domain types for in-memory state.
