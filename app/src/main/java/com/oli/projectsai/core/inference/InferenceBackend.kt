@@ -33,9 +33,14 @@ data class GenerationConfig(
     val numCtx: Int? = null
 )
 
-enum class ModelPrecision(@StringRes val displayNameRes: Int, val estimatedRamGb: Float) {
-    Q4(R.string.model_precision_q4, 4.5f),
-    SFP8(R.string.model_precision_sfp8, 7.5f)
+enum class ModelPrecision(
+    @StringRes val displayNameRes: Int,
+    /** Compact form for status chips where the parenthetical full label would overflow. */
+    val shortLabel: String,
+    val estimatedRamGb: Float,
+) {
+    Q4(R.string.model_precision_q4, "Q4", 4.5f),
+    SFP8(R.string.model_precision_sfp8, "SFP8", 7.5f),
 }
 
 data class ModelInfo(
