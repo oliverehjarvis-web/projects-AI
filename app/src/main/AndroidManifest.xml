@@ -31,7 +31,7 @@
         </provider>
 
         <activity
-            android:name=".ui.MainActivity"
+            android:name=".MainActivity"
             android:exported="true"
             android:windowSoftInputMode="adjustResize">
             <intent-filter>
@@ -51,7 +51,7 @@
         </provider>
 
         <service
-            android:name=".inference.GenerationForegroundService"
+            android:name=".core.inference.GenerationForegroundService"
             android:exported="false"
             android:foregroundServiceType="specialUse">
             <property

@@ -2,8 +2,8 @@ package com.oli.projectsai.di
 
 import android.content.Context
 import androidx.room.Room
-import com.oli.projectsai.data.db.AppDatabase
-import com.oli.projectsai.data.db.dao.*
+import com.oli.projectsai.core.db.AppDatabase
+import com.oli.projectsai.core.db.dao.*
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
