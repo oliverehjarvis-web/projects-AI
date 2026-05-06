@@ -289,6 +289,45 @@ class SettingsViewModel @Inject constructor(
         if (pullJob?.isActive != true) _pullState.value = null
     }
 
+    /**
+     * Deletes a remote model on the Ollama-backed server. Refreshes the model list afterwards
+     * and, if the deleted model was the user's saved default, picks the next installed model
+     * so the chat doesn't break the next time it tries to generate.
+     */
+    fun deleteRemoteModel(modelId: String) {
+        viewModelScope.launch {
+            val url = remoteSettings.serverUrl.first().trim().trimEnd('/')
+            val token = remoteSettings.apiToken.first()
+            if (url.isBlank() || token.isBlank()) {
+                _remoteError.value = "Configure server URL and token first."
+                return@launch
+            }
+            val encoded = java.net.URLEncoder.encode(modelId, "UTF-8").replace("+", "%20")
+            try {
+                httpClient.delete(
+                    url = "$url/v1/models/$encoded",
+                    bearer = token,
+                    connectTimeoutMs = 10_000,
+                    readTimeoutMs = 30_000
+                )
+                _remoteError.value = null
+                // If we just deleted the saved default, swap to whichever installed model
+                // remains so the chat doesn't fail on the next generate.
+                if (remoteSettings.defaultModel.first() == modelId) {
+                    val nextInstalled = _remoteModels.value
+                        .firstOrNull { it.installed && it.id != modelId }?.id
+                        .orEmpty()
+                    remoteSettings.setDefaultModel(nextInstalled)
+                }
+                fetchRemoteModels(url, token)
+            } catch (e: HttpError.Status) {
+                _remoteError.value = "Delete failed (HTTP ${e.code})."
+            } catch (t: Throwable) {
+                _remoteError.value = t.message ?: "Delete failed"
+            }
+        }
+    }
+
     fun cancelPull() {
         pullJob?.cancel()
         pullJob = null

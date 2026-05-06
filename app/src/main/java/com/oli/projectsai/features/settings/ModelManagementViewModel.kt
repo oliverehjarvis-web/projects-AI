@@ -265,4 +265,32 @@ class ModelManagementViewModel @Inject constructor(
             inferenceManager.unloadModel()
         }
     }
+
+    /**
+     * Deletes the on-disk model file and refreshes the visible list. Refuses if the file is
+     * currently loaded — pulling a `.litertlm` out from under a live `Engine` will crash.
+     * Also resets the download state for matching recommended models so the Download button
+     * comes back instead of leaving "Completed" stuck.
+     */
+    fun deleteLocalModel(path: String) {
+        viewModelScope.launch {
+            val loaded = inferenceManager.modelState.value as? ModelState.Loaded
+            if (loaded?.modelInfo?.filePath == path) {
+                _loadError.value = "Unload the model before deleting it."
+                return@launch
+            }
+            val file = File(path)
+            try {
+                if (file.exists() && !file.delete()) {
+                    _loadError.value = "Couldn't delete ${file.name}."
+                    return@launch
+                }
+                _downloadStates.update { it - file.name }
+                scanModelFiles()
+                _loadError.value = null
+            } catch (e: Exception) {
+                _loadError.value = "Delete failed: ${e.message}"
+            }
+        }
+    }
 }

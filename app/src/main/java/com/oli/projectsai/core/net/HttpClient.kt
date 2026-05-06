@@ -80,6 +80,17 @@ class HttpClient @Inject constructor() {
         execute("PUT", url, body, bearer, connectTimeoutMs, readTimeoutMs, headers)
     }
 
+    /** Performs a DELETE and returns the response body as UTF-8 text. */
+    suspend fun delete(
+        url: String,
+        bearer: String? = null,
+        connectTimeoutMs: Int = DEFAULT_CONNECT_TIMEOUT_MS,
+        readTimeoutMs: Int = DEFAULT_READ_TIMEOUT_MS,
+        headers: Map<String, String> = emptyMap()
+    ): String = withContext(Dispatchers.IO) {
+        execute("DELETE", url, body = null, bearer, connectTimeoutMs, readTimeoutMs, headers)
+    }
+
     /**
      * Streams response lines as a Flow. Empty lines are skipped; non-empty lines are emitted as
      * they arrive. Use `takeWhile` to stop early on a sentinel (e.g. SSE `[DONE]`).

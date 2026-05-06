@@ -127,6 +127,7 @@ fun SettingsScreen(
                 onPullModel = { id -> viewModel.pullModel(id) },
                 onDismissPull = { viewModel.dismissPullState() },
                 onCancelPull = { viewModel.cancelPull() },
+                onDeleteModel = { id -> viewModel.deleteRemoteModel(id) },
                 onSync = { viewModel.syncNow() },
                 onDismissSync = { viewModel.dismissSyncState() }
             )
@@ -448,6 +449,7 @@ private fun RemoteServerSection(
     onPullModel: (String) -> Unit,
     onDismissPull: () -> Unit,
     onCancelPull: () -> Unit,
+    onDeleteModel: (String) -> Unit,
     onSync: () -> Unit,
     onDismissSync: () -> Unit
 ) {
@@ -456,6 +458,7 @@ private fun RemoteServerSection(
     var draftModel by remember(remoteModel) { mutableStateOf(remoteModel) }
     var testResult by remember { mutableStateOf<Pair<Boolean, String>?>(null) }
     var modelDropdownExpanded by remember { mutableStateOf(false) }
+    var modelToDelete by remember { mutableStateOf<SettingsViewModel.RemoteModel?>(null) }
 
     val installedModels = remoteModels.filter { it.installed }
 
@@ -602,8 +605,8 @@ private fun RemoteServerSection(
                                         )
                                     }
                                 },
-                                trailingIcon = if (!model.installed) {
-                                    {
+                                trailingIcon = {
+                                    if (!model.installed) {
                                         IconButton(onClick = {
                                             modelDropdownExpanded = false
                                             onPullModel(model.id)
@@ -613,8 +616,18 @@ private fun RemoteServerSection(
                                                 contentDescription = "Pull ${model.label}"
                                             )
                                         }
+                                    } else {
+                                        IconButton(onClick = {
+                                            modelDropdownExpanded = false
+                                            modelToDelete = model
+                                        }) {
+                                            Icon(
+                                                Icons.Default.Delete,
+                                                contentDescription = "Delete ${model.label}"
+                                            )
+                                        }
                                     }
-                                } else null,
+                                },
                                 onClick = {
                                     if (model.installed) {
                                         draftModel = model.id
@@ -683,6 +696,30 @@ private fun RemoteServerSection(
             )
             else -> Unit
         }
+    }
+
+    modelToDelete?.let { m ->
+        AlertDialog(
+            onDismissRequest = { modelToDelete = null },
+            title = { Text("Delete remote model?") },
+            text = {
+                Text(
+                    "\"${m.label}\" will be removed from the server. " +
+                        "You'll need to pull it again to use it. (~${m.sizeGb} GB freed.)"
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    onDeleteModel(m.id)
+                    modelToDelete = null
+                }) {
+                    Text("Delete", color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { modelToDelete = null }) { Text("Cancel") }
+            }
+        )
     }
 }
 

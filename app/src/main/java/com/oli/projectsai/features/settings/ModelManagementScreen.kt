@@ -39,6 +39,10 @@ fun ModelManagementScreen(
 
     var customUrl by remember { mutableStateOf("") }
     var customUrlError by remember { mutableStateOf<String?>(null) }
+    // Per-row state for the local-model overflow menu + delete-confirmation dialog. One row
+    // can have its menu open at a time; modelToDelete is set when the user picks Delete.
+    var openMenuFile by remember { mutableStateOf<ModelFile?>(null) }
+    var modelToDelete by remember { mutableStateOf<ModelFile?>(null) }
 
     Scaffold(
         topBar = {
@@ -185,14 +189,38 @@ fun ModelManagementScreen(
                 }
             } else {
                 modelFiles.forEach { file ->
+                    val isLoadedFile = (modelState as? ModelState.Loaded)?.modelInfo?.filePath == file.path
                     ListItem(
                         headlineContent = { Text(file.name) },
                         supportingContent = { Text(file.path) },
                         trailingContent = {
-                            Button(
-                                onClick = { viewModel.loadModel(file.path, file.name, ModelPrecision.Q4) },
-                                enabled = modelState !is ModelState.Loading
-                            ) { Text("Load") }
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Button(
+                                    onClick = { viewModel.loadModel(file.path, file.name, ModelPrecision.Q4) },
+                                    enabled = modelState !is ModelState.Loading
+                                ) { Text("Load") }
+                                Box {
+                                    IconButton(onClick = { openMenuFile = file }) {
+                                        Icon(Icons.Default.MoreVert, contentDescription = "More")
+                                    }
+                                    DropdownMenu(
+                                        expanded = openMenuFile == file,
+                                        onDismissRequest = { openMenuFile = null }
+                                    ) {
+                                        DropdownMenuItem(
+                                            text = {
+                                                Text(if (isLoadedFile) "Delete (unload first)" else "Delete")
+                                            },
+                                            leadingIcon = { Icon(Icons.Default.Delete, null) },
+                                            enabled = !isLoadedFile,
+                                            onClick = {
+                                                openMenuFile = null
+                                                modelToDelete = file
+                                            }
+                                        )
+                                    }
+                                }
+                            }
                         }
                     )
                 }
@@ -223,6 +251,25 @@ fun ModelManagementScreen(
                 }
             }
         }
+    }
+
+    modelToDelete?.let { file ->
+        AlertDialog(
+            onDismissRequest = { modelToDelete = null },
+            title = { Text("Delete model?") },
+            text = { Text("\"${file.name}\" will be permanently removed from this device.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    viewModel.deleteLocalModel(file.path)
+                    modelToDelete = null
+                }) {
+                    Text("Delete", color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { modelToDelete = null }) { Text("Cancel") }
+            }
+        )
     }
 }
 
