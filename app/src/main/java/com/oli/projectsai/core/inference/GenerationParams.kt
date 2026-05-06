@@ -11,5 +11,10 @@ data class GenerationParams(
     val applyDefaultPreamble: Boolean = true,
     val maxOutputTokens: Int = 16000,
     /** Forwarded to remote backends so Ollama loads with the right window. */
-    val numCtx: Int? = null
+    val numCtx: Int? = null,
+    /**
+     * Set when the user tapped "Answer now" mid-generation. Appends an extra system-prompt
+     * directive telling the model to skip <think> deliberation and answer directly.
+     */
+    val forceShortAnswer: Boolean = false,
 )

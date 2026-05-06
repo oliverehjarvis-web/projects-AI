@@ -31,6 +31,7 @@ import com.oli.projectsai.core.ui.common.shareText
 import com.oli.projectsai.core.ui.components.TokenBreakdown
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -311,6 +312,34 @@ class ChatViewModel @Inject constructor(
         generationController.cancel()
     }
 
+    /**
+     * "Answer now" — cancel the current generation, soft-delete whatever partial answer was
+     * persisted on cancel, and immediately restart the same turn with the FORCE_ANSWER system
+     * directive set. Used to break out of a thinking model that's looping on its `<think>` block.
+     */
+    fun forceAnswer() {
+        if (!isGenerating.value) return
+        viewModelScope.launch {
+            generationController.cancel()
+            // Wait for the cancelled run to finish persisting and clear activeGeneration.
+            // Without this we'd race and either skip the soft-delete or fail to start the next
+            // generation (start() refuses while activeGeneration != null).
+            while (generationController.activeGeneration.value != null) {
+                delay(50)
+            }
+            // The cancelled run saved its partial output as an assistant message with a
+            // "_(stopped)_" suffix. Soft-delete it so the regenerated answer takes its place
+            // rather than appearing below it. Read the messages straight from the repo since
+            // the in-VM flow may not have ticked yet.
+            val msgs = chatRepository.getMessagesFlow(activeChatId).first()
+            val lastAssistant = msgs.lastOrNull { it.role == MessageRole.ASSISTANT }
+            if (lastAssistant != null && msgs.last().id == lastAssistant.id) {
+                runCatching { chatRepository.softDeleteMessage(lastAssistant.id) }
+            }
+            startGeneration(null, emptyList(), _chatTitle.value, forceShortAnswer = true)
+        }
+    }
+
     fun toggleWebSearch() {
         val next = !_webSearchEnabled.value
         _webSearchEnabled.value = next
@@ -326,7 +355,8 @@ class ChatViewModel @Inject constructor(
     private fun startGeneration(
         currentUserContent: String?,
         currentAttachments: List<String>,
-        titleHint: String
+        titleHint: String,
+        forceShortAnswer: Boolean = false,
     ) {
         // Cap output to the remaining context budget. Subtract a small buffer for the current
         // user message which may not yet be counted in the breakdown (flow hasn't fired yet).
@@ -360,7 +390,8 @@ class ChatViewModel @Inject constructor(
             maxOutputTokens = adaptiveMaxTokens,
             // Forwarded as Ollama's num_ctx for remote calls. Without it the 26B silently
             // ran at the 2048 default regardless of the project's contextLength setting.
-            numCtx = contextWindowTokens
+            numCtx = contextWindowTokens,
+            forceShortAnswer = forceShortAnswer,
         )
         val started = generationController.start(params)
         if (started) {

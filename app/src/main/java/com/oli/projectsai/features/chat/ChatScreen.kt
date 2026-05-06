@@ -132,9 +132,21 @@ fun ChatScreen(
         }
     }
 
-    // Auto-scroll to bottom on new messages
+    // Auto-scroll to bottom on new messages — but only if the user is already there. Without
+    // this gate, every streamed token yanks the viewport back down and the user can't scroll
+    // up to read earlier turns or the model's <think> trace mid-stream.
+    val isNearBottom by remember {
+        derivedStateOf {
+            val layout = listState.layoutInfo
+            if (layout.totalItemsCount == 0) true
+            else {
+                val lastVisible = layout.visibleItemsInfo.lastOrNull()?.index ?: -1
+                lastVisible >= layout.totalItemsCount - 2
+            }
+        }
+    }
     LaunchedEffect(messages.size, streamingContent) {
-        if (messages.isNotEmpty() || streamingContent.isNotBlank()) {
+        if (isNearBottom && (messages.isNotEmpty() || streamingContent.isNotBlank())) {
             listState.animateScrollToItem(
                 (messages.size + if (streamingContent.isNotBlank()) 1 else 0).coerceAtLeast(0)
             )
@@ -286,52 +298,82 @@ fun ChatScreen(
                 }
             }
 
-            // Messages
-            LazyColumn(
+            // Messages — wrapped in a Box so the "Jump to latest" pill can overlay the bottom
+            // when the user has scrolled up.
+            Box(
                 modifier = Modifier
                     .weight(1f)
-                    .fillMaxWidth(),
-                state = listState,
-                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
+                    .fillMaxWidth()
             ) {
-                itemsIndexed(messages, key = { _, m -> m.id }) { index, message ->
-                    val isLastAssistant = message.role == MessageRole.ASSISTANT &&
-                        index == messages.lastIndex
-                    MessageBubble(
-                        message = message,
-                        canRegenerate = isLastAssistant && !isGenerating,
-                        onCopy = {
-                            viewModel.copyToClipboard(message.content)
-                            showCopyToast("Copied message")
-                        },
-                        onShare = { viewModel.shareText(message.content) },
-                        onCopyCode = { code ->
-                            viewModel.copyToClipboard(code)
-                            showCopyToast("Copied code")
-                        },
-                        onRegenerate = { viewModel.regenerateLastResponse() }
-                    )
-                }
-
-                // Streaming response
-                if (streamingContent.isNotBlank()) {
-                    item {
-                        StreamingBubble(
-                            content = streamingContent,
+                LazyColumn(
+                    modifier = Modifier.fillMaxSize(),
+                    state = listState,
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    itemsIndexed(messages, key = { _, m -> m.id }) { index, message ->
+                        val isLastAssistant = message.role == MessageRole.ASSISTANT &&
+                            index == messages.lastIndex
+                        MessageBubble(
+                            message = message,
+                            canRegenerate = isLastAssistant && !isGenerating,
+                            onCopy = {
+                                viewModel.copyToClipboard(message.content)
+                                showCopyToast("Copied message")
+                            },
+                            onShare = { viewModel.shareText(message.content) },
                             onCopyCode = { code ->
                                 viewModel.copyToClipboard(code)
                                 showCopyToast("Copied code")
-                            }
+                            },
+                            onRegenerate = { viewModel.regenerateLastResponse() }
                         )
+                    }
+
+                    // Streaming response
+                    if (streamingContent.isNotBlank()) {
+                        item {
+                            StreamingBubble(
+                                content = streamingContent,
+                                onCopyCode = { code ->
+                                    viewModel.copyToClipboard(code)
+                                    showCopyToast("Copied code")
+                                }
+                            )
+                        }
+                    }
+
+                    // Loading indicator — ticks an elapsed counter so the user can tell the model
+                    // is still working during slow prompt processing on CPU.
+                    if (isGenerating && streamingContent.isBlank()) {
+                        item {
+                            ThinkingIndicator()
+                        }
                     }
                 }
 
-                // Loading indicator — ticks an elapsed counter so the user can tell the model
-                // is still working during slow prompt processing on CPU.
-                if (isGenerating && streamingContent.isBlank()) {
-                    item {
-                        ThinkingIndicator()
+                if (!isNearBottom) {
+                    FilledTonalButton(
+                        onClick = {
+                            scope.launch {
+                                listState.animateScrollToItem(
+                                    (messages.size + if (streamingContent.isNotBlank()) 1 else 0)
+                                        .coerceAtLeast(0)
+                                )
+                            }
+                        },
+                        modifier = Modifier
+                            .align(Alignment.BottomCenter)
+                            .padding(bottom = 8.dp),
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp)
+                    ) {
+                        Icon(
+                            Icons.Default.KeyboardArrowDown,
+                            contentDescription = null,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(Modifier.width(4.dp))
+                        Text("Jump to latest", style = MaterialTheme.typography.labelMedium)
                     }
                 }
             }
@@ -364,6 +406,31 @@ fun ChatScreen(
                         ) {
                             Icon(Icons.Default.Close, "Remove", modifier = Modifier.size(14.dp))
                         }
+                    }
+                }
+            }
+
+            // "Answer now" — appears mid-generation so the user can break a thinking model out
+            // of a long <think> deliberation. Cancels the current run, drops the partial, and
+            // restarts the same turn with FORCE_ANSWER_INSTRUCTIONS in the system prompt.
+            if (isGenerating) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 12.dp, vertical = 4.dp),
+                    horizontalArrangement = Arrangement.End
+                ) {
+                    FilledTonalButton(
+                        onClick = { viewModel.forceAnswer() },
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp)
+                    ) {
+                        Icon(
+                            Icons.Default.FastForward,
+                            contentDescription = null,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(Modifier.width(4.dp))
+                        Text("Answer now", style = MaterialTheme.typography.labelMedium)
                     }
                 }
             }

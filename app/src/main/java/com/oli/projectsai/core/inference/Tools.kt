@@ -57,6 +57,18 @@ If you can answer from what you already know, answer directly — do not use <se
 in normal answers. Only use the tag when you would otherwise need to look something up.
 """.trimIndent()
 
+/**
+ * Appended to the system prompt when the user has tapped "Answer now" on a still-thinking
+ * generation. Tells the model to skip extended deliberation and answer directly. Soft hint —
+ * thinking-capable models honour it most of the time but not always; if it stops being
+ * reliable, escalate to assistant-prefill of `</think>`.
+ */
+internal val FORCE_ANSWER_INSTRUCTIONS = """
+The user has chosen to skip extended deliberation for this turn. Answer directly and
+concisely with the information you have. Do not emit <think>...</think> blocks; do not
+plan further. Your response must start immediately with the final answer.
+""".trimIndent()
+
 internal val TOOL_LOOP_INSTRUCTIONS = """
 You have two tools:
 
