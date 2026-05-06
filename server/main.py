@@ -9,6 +9,15 @@ from fastapi.staticfiles import StaticFiles
 from db import init_db
 from routers import health, inference, server_info, sync, models, web_search
 
+# Force-configure the root logger before any router emits. Uvicorn ships with its own
+# `uvicorn.*` handlers but leaves the root at WARNING, which silences our routers.
+# `force=True` overrides any handler uvicorn may have attached on the root.
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(name)s] %(levelname)s %(message)s",
+    datefmt="%H:%M:%S",
+    force=True,
+)
 logger = logging.getLogger(__name__)
 
 
