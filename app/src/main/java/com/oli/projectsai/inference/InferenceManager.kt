@@ -24,7 +24,7 @@ sealed class ModelState {
 
 @Singleton
 class InferenceManager @Inject constructor(
-    private val localBackend: LocalMediaPipeBackend,
+    private val localBackend: LocalLiteRtBackend,
     private val remoteBackend: RemoteHttpBackend,
     @ApplicationScope private val scope: CoroutineScope
 ) {
@@ -53,7 +53,7 @@ class InferenceManager @Inject constructor(
 
     fun getActiveBackend(): InferenceBackend? = backends.values.firstOrNull { it.isLoaded }
 
-    suspend fun loadModel(modelInfo: ModelInfo, backendId: String = "local_mediapipe") {
+    suspend fun loadModel(modelInfo: ModelInfo, backendId: String = "local_litertlm") {
         val backend = backends[backendId]
             ?: throw IllegalArgumentException("Unknown backend: $backendId")
 

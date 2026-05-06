@@ -55,7 +55,7 @@ object SummarisationPrompts {
     }
 
     /**
-     * Replacement prompt for [LocalMediaPipeBackend.transcribe] when the user has asked for
+     * Replacement prompt for [LocalLiteRtBackend.transcribe] when the user has asked for
      * speaker labels. The model can only see one chunk at a time, so labels here are local —
      * the reconcile pass below renumbers them across chunks.
      */

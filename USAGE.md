@@ -197,7 +197,7 @@ Access via the **⚙** icon on the Home screen.
 
 ### Settings screen
 - **Model Management** — same screen you used in step 2
-- **Backends** — shows which inference backends are available. v0.1 only has **Local (MediaPipe)**; a remote backend (home NAS) is planned.
+- **Backends** — shows which inference backends are available: **Local (LiteRT-LM)** runs on-device, and **Remote (HTTP)** streams from the FastAPI server in `/server`.
 - **About** — version info
 
 ### Model Management screen
@@ -220,11 +220,11 @@ The app follows your system dark/light setting. On Android 12+ it also picks up 
 |---|---|
 | **"No model loaded"** error when sending a chat | Go to Settings → Model Management and tap **Load** next to your model file |
 | **Model load fails with OOM** | Close other apps (Chrome/Maps/games) and try again. If SFP8 still OOMs, switch to Q4 |
-| **Import model file fails** | Make sure the file is a `.litertlm` or `.task` MediaPipe-format file, not a raw Hugging Face checkpoint |
+| **Import model file fails** | Make sure the file is a `.litertlm`, `.task`, or `.bin` LiteRT-LM-format file, not a raw Hugging Face checkpoint |
 | **Chat feels slow on first message** | First inference warms the KV cache; subsequent responses are faster. If it's still slow, try Q4 |
 | **App won't install (APK rejected)** | Enable "Install unknown apps" for your browser/file manager in system settings |
 | **Memory token counter looks wrong** | The count is currently a ~3.5 chars/token approximation — it's a budget indicator, not a precise figure. Will be replaced with the real tokeniser in a future version |
-| **App crashes on startup** | Clear app data via Android settings and re-import the model. If that doesn't help, check `adb logcat \| grep -i cortex\\|projectsai\\|mediapipe` |
+| **App crashes on startup** | Clear app data via Android settings and re-import the model. If that doesn't help, check `adb logcat \| grep -iE 'projectsai\|litertlm\|LocalLiteRT'` |
 
 ---
 

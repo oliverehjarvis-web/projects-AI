@@ -23,15 +23,10 @@ OnePlus 13 (Snapdragon 8 Elite, 16GB RAM, Android 15)
 
 ### Model Setup
 
-The app uses Google's Gemma 4 E4B model via MediaPipe LLM Inference API.
+The app uses Google's Gemma 4 E4B model via [LiteRT-LM](https://github.com/google-ai-edge/litert), Google's on-device LLM runtime.
 
-1. Download the Gemma 4 E4B `.task` file from [Kaggle](https://www.kaggle.com/models/google/gemma) or convert it using the MediaPipe model conversion tools
-2. Two precision options:
-   - **SFP8** (~7.5GB RAM) - Recommended for OnePlus 13. Better quality.
-   - **Q4** (~4.5GB RAM) - Lower memory usage, slightly reduced quality.
-3. Launch the app, go to **Settings > Model Management**
-4. Tap **Import .task File** and select your downloaded model
-5. Select your preferred precision and tap **Load**
+1. Download a `.litertlm` Gemma 4 file (the **Settings → Model Management** screen offers a one-tap download from `litert-community` on Hugging Face), or import a local `.litertlm` / `.task` / `.bin` file via **Import Model File**.
+2. Tap **Load** on the imported file. RAM usage on a 16 GB OnePlus 13 is ≈ 4.5 GB for the E4B build.
 
 The model file is stored in the app's private external storage (`Android/data/com.oli.projectsai/files/models/`).
 
@@ -56,5 +51,5 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for details on the inference abstraction 
 - Kotlin, Jetpack Compose, Material 3
 - Room (SQLite) for persistence
 - Hilt for dependency injection
-- MediaPipe LLM Inference API for on-device inference
+- LiteRT-LM for on-device inference
 - MVVM architecture with clean inference abstraction

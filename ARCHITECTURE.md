@@ -13,11 +13,12 @@ Projects AI uses MVVM with a clean separation between the inference layer and th
 │  - Routes generation requests                │
 │  - Exposes model state                       │
 ├──────────────────┬──────────────────────────┤
-│ LocalMediaPipe   │  RemoteHttpBackend       │
-│ Backend          │  (TODO - v2)             │
+│ LocalLiteRt      │  RemoteHttpBackend       │
+│ Backend          │                          │
 │                  │                          │
-│ Runs Gemma 4 E4B │  Hits OpenAI-compatible  │
-│ via MediaPipe    │  endpoint on home NAS    │
+│ Runs Gemma 4 E4B │  Streams from the home   │
+│ via LiteRT-LM    │  NAS over an OpenAI-     │
+│ on the phone     │  compatible HTTP API     │
 └──────────────────┴──────────────────────────┘
 ```
 
@@ -44,18 +45,18 @@ interface InferenceBackend {
 }
 ```
 
-### Adding a Remote Backend
+### Adding another backend
 
-To add a remote backend (e.g., a larger model on a home NAS):
+`RemoteHttpBackend` is the second backend already shipping (since v2.1.0). It streams SSE from the FastAPI server in `/server`, which proxies to Ollama. To add a third backend:
 
-1. Create `RemoteHttpBackend` implementing `InferenceBackend`
-2. The `generate()` method should hit an OpenAI-compatible `/v1/chat/completions` endpoint with `stream: true` and yield tokens from SSE chunks
-3. `countTokens()` can either call a remote tokenisation endpoint or use a local approximation
-4. Register the new backend in `InferenceManager.backends` map
-5. Add a configuration screen for URL, API key, and model name
-6. The `Project.preferredBackend` field already supports `LOCAL` and `REMOTE` enum values
+1. Implement `InferenceBackend` in `inference/`.
+2. The `generate()` method should yield streamed tokens as a `Flow<String>`.
+3. `countTokens()` can call a remote tokeniser or use a local approximation (the on-device backend currently uses ~4 chars/token — see `LocalLiteRtBackend.countTokens`).
+4. Register the new backend in the `backends` map in `InferenceManager`.
+5. Reuse `data/preferences/` for any per-backend config (URL, token, etc.) — the same DataStore pattern already powers `RemoteSettings`, `GitHubSettings`, and friends.
+6. Extend `PreferredBackend` if a project should be allowed to pin to it.
 
-No changes needed to UI, ViewModels, or data layer - the `InferenceManager` handles routing.
+No UI / ViewModel / data-layer churn is needed for the routing itself — `InferenceManager` looks up by `id` string.
 
 ## Data Layer
 
@@ -80,7 +81,7 @@ This is handled in `ChatViewModel.loadProjectContext()`.
 
 ## Token Counting
 
-Currently uses a character-based approximation (~3.5 chars per token). When MediaPipe exposes a tokeniser count API, replace the implementation in `LocalMediaPipeBackend.countTokens()`. The approximation is accurate enough for budget tracking.
+Currently uses a character-based approximation (~4 chars per token, calibrated against Gemma SentencePiece). LiteRT-LM 0.10 does not expose a tokeniser; once it does, replace the implementation in `LocalLiteRtBackend.countTokens()`. The approximation is accurate enough for budget tracking.
 
 ## Module Structure
 

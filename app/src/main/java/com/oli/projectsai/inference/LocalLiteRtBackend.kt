@@ -20,7 +20,7 @@ import javax.inject.Inject
 import javax.inject.Singleton
 
 @Singleton
-class LocalMediaPipeBackend @Inject constructor(
+class LocalLiteRtBackend @Inject constructor(
     @ApplicationContext private val context: Context
 ) : InferenceBackend {
 
@@ -34,8 +34,8 @@ class LocalMediaPipeBackend @Inject constructor(
         private const val PRIOR_CONVERSATION_WINDOW = 20
     }
 
-    override val id: String = "local_mediapipe"
-    override val displayName: String = "Local (LiteRT)"
+    override val id: String = "local_litertlm"
+    override val displayName: String = "Local (LiteRT-LM)"
     override val isAvailable: Boolean = true
     override val supportsTranscription: Boolean = true
     override val supportsVision: Boolean = true
