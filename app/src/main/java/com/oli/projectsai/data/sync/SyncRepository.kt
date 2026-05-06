@@ -11,14 +11,13 @@ import com.oli.projectsai.data.db.entity.PreferredBackend
 import com.oli.projectsai.data.db.entity.Project
 import com.oli.projectsai.data.db.entity.QuickAction
 import com.oli.projectsai.data.preferences.RemoteSettings
+import com.oli.projectsai.net.HttpClient
+import com.oli.projectsai.net.HttpError
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
-import java.io.OutputStreamWriter
-import java.net.HttpURLConnection
-import java.net.URL
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -34,7 +33,8 @@ class SyncRepository @Inject constructor(
     private val projectDao: ProjectDao,
     private val chatDao: ChatDao,
     private val messageDao: MessageDao,
-    private val quickActionDao: QuickActionDao
+    private val quickActionDao: QuickActionDao,
+    private val httpClient: HttpClient
 ) {
     suspend fun syncNow(): SyncResult = withContext(Dispatchers.IO) {
         val serverUrl = remoteSettings.serverUrl.first().trimEnd('/')
@@ -314,47 +314,32 @@ class SyncRepository @Inject constructor(
 
     // ── HTTP helpers ──────────────────────────────────────────────────────────
 
-    private fun get(url: String, token: String): JSONObject {
-        val conn = (URL(url).openConnection() as HttpURLConnection).apply {
-            requestMethod = "GET"
-            connectTimeout = 15_000
-            readTimeout = 30_000
-            setRequestProperty("Authorization", "Bearer $token")
-        }
-        return try {
-            if (conn.responseCode != 200) throw serverError("GET", url, conn)
-            JSONObject(conn.inputStream.bufferedReader().readText())
-        } finally {
-            conn.disconnect()
-        }
+    private suspend fun get(url: String, token: String): JSONObject = try {
+        JSONObject(
+            httpClient.get(url = url, bearer = token, connectTimeoutMs = 15_000, readTimeoutMs = 30_000)
+        )
+    } catch (e: HttpError.Status) {
+        throw serverError("GET", url, e)
     }
 
-    private fun put(url: String, token: String, body: JSONObject): JSONObject {
-        val conn = (URL(url).openConnection() as HttpURLConnection).apply {
-            requestMethod = "PUT"
-            connectTimeout = 15_000
-            readTimeout = 30_000
-            doOutput = true
-            setRequestProperty("Content-Type", "application/json")
-            setRequestProperty("Authorization", "Bearer $token")
-        }
-        return try {
-            OutputStreamWriter(conn.outputStream).use { it.write(body.toString()) }
-            if (conn.responseCode != 200) throw serverError("PUT", url, conn)
-            JSONObject(conn.inputStream.bufferedReader().readText())
-        } finally {
-            conn.disconnect()
-        }
+    private suspend fun put(url: String, token: String, body: JSONObject): JSONObject = try {
+        JSONObject(
+            httpClient.putJson(
+                url = url,
+                body = body.toString(),
+                bearer = token,
+                connectTimeoutMs = 15_000,
+                readTimeoutMs = 30_000
+            )
+        )
+    } catch (e: HttpError.Status) {
+        throw serverError("PUT", url, e)
     }
 
-    private fun serverError(method: String, url: String, conn: HttpURLConnection): IllegalStateException {
-        val code = conn.responseCode
-        val detail = runCatching {
-            val raw = conn.errorStream?.bufferedReader()?.use { it.readText() }.orEmpty()
-            if (raw.isBlank()) null
-            else runCatching { JSONObject(raw).optString("error").ifBlank { raw } }.getOrDefault(raw)
-        }.getOrNull()
+    private fun serverError(method: String, url: String, e: HttpError.Status): IllegalStateException {
+        val detail = e.body.takeIf { it.isNotBlank() }
+            ?.let { raw -> runCatching { JSONObject(raw).optString("error").ifBlank { raw } }.getOrDefault(raw) }
         val suffix = detail?.takeIf { it.isNotBlank() }?.let { " — ${it.take(200)}" }.orEmpty()
-        return IllegalStateException("$method $url → HTTP $code$suffix")
+        return IllegalStateException("$method $url → HTTP ${e.code}$suffix")
     }
 }

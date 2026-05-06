@@ -1,15 +1,12 @@
 package com.oli.projectsai.data.linkedin
 
 import com.oli.projectsai.data.preferences.LinkedInSettings
-import kotlinx.coroutines.Dispatchers
+import com.oli.projectsai.net.HttpClient
+import com.oli.projectsai.net.HttpError
 import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.IOException
-import java.io.OutputStreamWriter
-import java.net.HttpURLConnection
-import java.net.URL
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -32,26 +29,26 @@ class LinkedInSessionExpired(message: String) : IOException(message)
 class LinkedInHttpError(val code: Int, message: String) : IOException(message)
 
 /**
- * Thin HTTP wrapper around the standalone linkedin-agent service. Mirrors the helper style in
- * SyncRepository (HttpURLConnection + bearer token) so the codebase stays consistent.
+ * Thin HTTP wrapper around the standalone linkedin-agent service.
  */
 @Singleton
 class LinkedInClient @Inject constructor(
-    private val settings: LinkedInSettings
+    private val settings: LinkedInSettings,
+    private val httpClient: HttpClient
 ) {
 
-    suspend fun sessionHealth(): Boolean = withContext(Dispatchers.IO) {
+    suspend fun sessionHealth(): Boolean {
         val (url, token) = require()
-        val res = get("$url/session-health", token)
-        res.optBoolean("logged_in", false)
+        val res = getJson("$url/session-health", token)
+        return res.optBoolean("logged_in", false)
     }
 
-    suspend fun fetchFeed(maxPosts: Int): List<RawFeedPost> = withContext(Dispatchers.IO) {
+    suspend fun fetchFeed(maxPosts: Int): List<RawFeedPost> {
         val (url, token) = require()
         val body = JSONObject().put("max_posts", maxPosts)
-        val res = post("$url/feed/fetch", token, body)
+        val res = postJson("$url/feed/fetch", token, body)
         val posts = res.optJSONArray("posts") ?: JSONArray()
-        List(posts.length()) { i ->
+        return List(posts.length()) { i ->
             val o = posts.getJSONObject(i)
             RawFeedPost(
                 urn = o.getString("urn"),
@@ -71,14 +68,12 @@ class LinkedInClient @Inject constructor(
         postAction(urn, "comment", text = text)
     }
 
-    private suspend fun postAction(urn: String, action: String, text: String?) =
-        withContext(Dispatchers.IO) {
-            val (url, token) = require()
-            val body = JSONObject().put("urn", urn).put("action", action)
-            if (text != null) body.put("text", text)
-            post("$url/feed/post", token, body)
-            Unit
-        }
+    private suspend fun postAction(urn: String, action: String, text: String?) {
+        val (url, token) = require()
+        val body = JSONObject().put("urn", urn).put("action", action)
+        if (text != null) body.put("text", text)
+        postJson("$url/feed/post", token, body)
+    }
 
     private suspend fun require(): Pair<String, String> {
         val url = settings.agentUrl.first().trimEnd('/')
@@ -87,46 +82,37 @@ class LinkedInClient @Inject constructor(
         return url to token
     }
 
-    private fun get(url: String, token: String): JSONObject {
-        val conn = (URL(url).openConnection() as HttpURLConnection).apply {
-            requestMethod = "GET"
-            connectTimeout = 15_000
-            readTimeout = 60_000
-            setRequestProperty("Authorization", "Bearer $token")
-        }
-        return try {
-            readJson(conn, "GET", url)
-        } finally {
-            conn.disconnect()
-        }
+    private suspend fun getJson(url: String, token: String): JSONObject = try {
+        JSONObject(
+            httpClient.get(
+                url = url,
+                bearer = token,
+                connectTimeoutMs = 15_000,
+                readTimeoutMs = 60_000
+            )
+        )
+    } catch (e: HttpError.Status) {
+        throw mapError("GET", url, e)
     }
 
-    private fun post(url: String, token: String, body: JSONObject): JSONObject {
-        val conn = (URL(url).openConnection() as HttpURLConnection).apply {
-            requestMethod = "POST"
-            connectTimeout = 15_000
-            // /feed/fetch and /feed/post drive a real headless browser on the other end —
-            // give them headroom rather than failing at 30s.
-            readTimeout = 120_000
-            doOutput = true
-            setRequestProperty("Content-Type", "application/json")
-            setRequestProperty("Authorization", "Bearer $token")
-        }
-        return try {
-            OutputStreamWriter(conn.outputStream).use { it.write(body.toString()) }
-            readJson(conn, "POST", url)
-        } finally {
-            conn.disconnect()
-        }
+    private suspend fun postJson(url: String, token: String, body: JSONObject): JSONObject = try {
+        JSONObject(
+            httpClient.postJson(
+                url = url,
+                body = body.toString(),
+                bearer = token,
+                connectTimeoutMs = 15_000,
+                // /feed/fetch and /feed/post drive a real headless browser on the other end —
+                // give them headroom rather than failing at 30s.
+                readTimeoutMs = 120_000
+            )
+        )
+    } catch (e: HttpError.Status) {
+        throw mapError("POST", url, e)
     }
 
-    private fun readJson(conn: HttpURLConnection, method: String, url: String): JSONObject {
-        val code = conn.responseCode
-        if (code in 200..299) {
-            return JSONObject(conn.inputStream.bufferedReader().readText())
-        }
-        val errBody = conn.errorStream?.bufferedReader()?.readText().orEmpty()
-        if (code == 409) throw LinkedInSessionExpired(errBody.ifBlank { "Session expired" })
-        throw LinkedInHttpError(code, "$method $url -> $code: ${errBody.take(300)}")
+    private fun mapError(method: String, url: String, e: HttpError.Status): IOException {
+        if (e.code == 409) return LinkedInSessionExpired(e.body.ifBlank { "Session expired" })
+        return LinkedInHttpError(e.code, "$method $url -> ${e.code}: ${e.body.take(300)}")
     }
 }
