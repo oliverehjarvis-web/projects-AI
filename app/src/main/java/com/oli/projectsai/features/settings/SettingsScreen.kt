@@ -72,9 +72,10 @@ fun SettingsScreen(
                 .padding(padding)
                 .verticalScroll(rememberScrollState())
         ) {
-            // Model section
+            // ── Local AI ──────────────────────────────────────────────────
+            // On-device chat model + the voice model used for mic transcription.
             Text(
-                "Model",
+                "Local AI",
                 style = MaterialTheme.typography.titleSmall,
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)
             )
@@ -95,8 +96,44 @@ fun SettingsScreen(
                 modifier = Modifier.clickable(onClick = onModelManagement)
             )
 
+            VoiceModelSelector(
+                currentPath = voiceModelPath,
+                options = voiceModelOptions,
+                onSelect = { viewModel.setVoiceModelPath(it) },
+                onRefresh = { viewModel.refreshVoiceModelOptions() },
+                onOpenModelManagement = onModelManagement
+            )
+
             HorizontalDivider()
 
+            // ── Remote AI ─────────────────────────────────────────────────
+            Text(
+                "Remote AI",
+                style = MaterialTheme.typography.titleSmall,
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)
+            )
+
+            RemoteServerSection(
+                serverUrl = serverUrl,
+                apiToken = apiToken,
+                remoteModel = remoteModel,
+                remoteModels = remoteModels,
+                remoteError = remoteError,
+                pullState = pullState,
+                syncState = syncState,
+                onSave = { url, token, model -> viewModel.saveRemoteSettings(url, token, model) },
+                onTest = { url, token, onResult -> viewModel.testConnection(url, token, onResult) },
+                onFetchModels = { url, token -> viewModel.fetchRemoteModels(url, token) },
+                onPullModel = { id -> viewModel.pullModel(id) },
+                onDismissPull = { viewModel.dismissPullState() },
+                onCancelPull = { viewModel.cancelPull() },
+                onSync = { viewModel.syncNow() },
+                onDismissSync = { viewModel.dismissSyncState() }
+            )
+
+            HorizontalDivider()
+
+            // ── Assistant ─────────────────────────────────────────────────
             Text(
                 "Assistant",
                 style = MaterialTheme.typography.titleSmall,
@@ -112,8 +149,9 @@ fun SettingsScreen(
 
             HorizontalDivider()
 
+            // ── Integrations ──────────────────────────────────────────────
             Text(
-                "AI tools",
+                "Integrations",
                 style = MaterialTheme.typography.titleSmall,
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)
             )
@@ -164,52 +202,9 @@ fun SettingsScreen(
 
             HorizontalDivider()
 
-            // Remote server section
+            // ── About & updates ───────────────────────────────────────────
             Text(
-                "Remote server",
-                style = MaterialTheme.typography.titleSmall,
-                modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)
-            )
-
-            RemoteServerSection(
-                serverUrl = serverUrl,
-                apiToken = apiToken,
-                remoteModel = remoteModel,
-                remoteModels = remoteModels,
-                remoteError = remoteError,
-                pullState = pullState,
-                syncState = syncState,
-                onSave = { url, token, model -> viewModel.saveRemoteSettings(url, token, model) },
-                onTest = { url, token, onResult -> viewModel.testConnection(url, token, onResult) },
-                onFetchModels = { url, token -> viewModel.fetchRemoteModels(url, token) },
-                onPullModel = { id -> viewModel.pullModel(id) },
-                onDismissPull = { viewModel.dismissPullState() },
-                onCancelPull = { viewModel.cancelPull() },
-                onSync = { viewModel.syncNow() },
-                onDismissSync = { viewModel.dismissSyncState() }
-            )
-
-            HorizontalDivider()
-
-            // Voice transcription section
-            Text(
-                "Voice transcription",
-                style = MaterialTheme.typography.titleSmall,
-                modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)
-            )
-            VoiceModelSelector(
-                currentPath = voiceModelPath,
-                options = voiceModelOptions,
-                onSelect = { viewModel.setVoiceModelPath(it) },
-                onRefresh = { viewModel.refreshVoiceModelOptions() },
-                onOpenModelManagement = onModelManagement
-            )
-
-            HorizontalDivider()
-
-            // About section
-            Text(
-                "About",
+                "About & updates",
                 style = MaterialTheme.typography.titleSmall,
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)
             )
@@ -231,7 +226,6 @@ fun SettingsScreen(
                 )
             }
 
-            // Update UI
             UpdateSection(
                 updateState = updateState,
                 onCheckForUpdate = { viewModel.checkForUpdate() },
