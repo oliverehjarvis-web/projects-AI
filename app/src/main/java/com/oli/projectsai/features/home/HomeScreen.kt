@@ -12,8 +12,10 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.oli.projectsai.R
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.oli.projectsai.core.db.entity.Project
@@ -38,10 +40,13 @@ fun HomeScreen(
         topBar = {
             TopAppBar(
                 title = {
-                    Text(
-                        "Projects AI",
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
+                    // The wordmark "Projects AI" was getting ellipsised on phone widths once
+                    // four actions sat on the right. The logomark takes ~32 dp instead of
+                    // ~110 dp and tints with the surface colour for free.
+                    Icon(
+                        painter = painterResource(R.drawable.ic_app_logo),
+                        contentDescription = "Projects AI",
+                        modifier = Modifier.size(32.dp),
                     )
                 },
                 actions = {

@@ -1,4 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <color name="ic_launcher_background">#7B61FF</color>
+    <!-- Adaptive-icon background colour. The live background is the gradient defined in
+         drawable/ic_launcher_background.xml; this stays as a fallback. -->
+    <color name="ic_launcher_background">#2563EB</color>
 </resources>
