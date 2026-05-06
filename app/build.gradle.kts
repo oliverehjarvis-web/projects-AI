@@ -75,8 +75,11 @@ dependencies {
     implementation("com.google.dagger:hilt-android:2.53.1")
     ksp("com.google.dagger:hilt-android-compiler:2.53.1")
 
-    // LiteRT-LM on-device inference (supports .litertlm model files)
-    implementation("com.google.ai.edge.litertlm:litertlm-android:0.10.0")
+    // LiteRT-LM on-device inference (supports .litertlm model files).
+    // Bump from 0.10.0 → 0.11.0: the gemma-4-E2B-it.litertlm artifact on Hugging Face is
+    // built against a newer graph format and 0.10.0 fails to load it with "expected 1
+    // argument but got". 0.11.0 is the latest stable on Google Maven as of 2026-05-04.
+    implementation("com.google.ai.edge.litertlm:litertlm-android:0.11.0")
 
     // Coroutines
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")

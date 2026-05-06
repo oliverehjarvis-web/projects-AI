@@ -255,8 +255,36 @@ class ModelManagementViewModel @Inject constructor(
                     )
                 )
             } catch (e: Exception) {
-                _loadError.value = "Load failed: ${e.message}"
+                _loadError.value = friendlyLoadError(e)
             }
+        }
+    }
+
+    /**
+     * Translates raw load-failure messages from LiteRT-LM into something the user can act on.
+     * The native runtime emits cryptic strings like "expected 1 argument but got" when the
+     * model graph doesn't match its parser version; without this mapping the user just sees
+     * that text and has no idea what to do.
+     */
+    private fun friendlyLoadError(e: Exception): String {
+        val raw = (e.message ?: e::class.simpleName.orEmpty())
+        val cause = generateSequence(e.cause as? Throwable) { it.cause }.firstOrNull()?.message.orEmpty()
+        val combined = "$raw $cause"
+        return when {
+            combined.contains("expected", ignoreCase = true) &&
+                combined.contains("argument", ignoreCase = true) ->
+                "This model file isn't compatible with the on-device runtime. The file's " +
+                    "graph format is newer than the LiteRT-LM version this app links against. " +
+                    "Try a different model, or wait for a future app update."
+            combined.contains("OOM", ignoreCase = true) ||
+                combined.contains("out of memory", ignoreCase = true) ->
+                "Not enough memory to load this model. Close other apps and retry, or pick a " +
+                    "smaller model."
+            combined.contains("miniaudio", ignoreCase = true) ->
+                "The model couldn't initialise its audio decoder. If you intended to transcribe, " +
+                    "this model may not include the audio encoder weights."
+            else ->
+                "Load failed: $raw"
         }
     }
 
