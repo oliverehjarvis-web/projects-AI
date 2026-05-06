@@ -1,9 +1,12 @@
-import uuid
 import time
+import uuid
+from contextlib import asynccontextmanager
 from typing import Any
+
+import aiosqlite
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
-import aiosqlite
+
 from auth import require_auth
 from db import get_db
 
@@ -67,11 +70,20 @@ class PushBody(BaseModel):
     items: list[Any]
 
 
-# ── Helpers ──────────────────────────────────────────────────────────────────
+# ── Connection lifecycle ─────────────────────────────────────────────────────
 
-def _cutoff(since: int) -> int:
-    return int(time.time() * 1000) - _THIRTY_DAYS_MS if since == 0 else 0
+@asynccontextmanager
+async def _sync_db():
+    """Open a sqlite connection and guarantee close() — replaces the try/finally pattern
+    that was hand-rolled in every sync endpoint."""
+    db = await get_db()
+    try:
+        yield db
+    finally:
+        await db.close()
 
+
+# ── Read helpers ─────────────────────────────────────────────────────────────
 
 async def _fetch_rows(db: aiosqlite.Connection, table: str, since: int, **filters) -> list[dict]:
     cutoff = int(time.time() * 1000) - _THIRTY_DAYS_MS
@@ -86,10 +98,40 @@ async def _fetch_rows(db: aiosqlite.Connection, table: str, since: int, **filter
     return [dict(r) for r in rows]
 
 
+# ── Upsert ───────────────────────────────────────────────────────────────────
+
+async def _upsert(
+    db: aiosqlite.Connection,
+    table: str,
+    values: dict[str, Any],
+    update_cols: list[str],
+) -> str:
+    """
+    Generic last-write-wins upsert. Caller passes:
+      - `values`: column→value (must include remote_id, created_at, updated_at; remote_id may be None)
+      - `update_cols`: which columns get refreshed on ON CONFLICT (typically all writeable
+        columns minus `created_at` and `remote_id`).
+
+    Returns the remote_id (newly minted if `values["remote_id"]` was None).
+    """
+    rid = values.get("remote_id") or str(uuid.uuid4())
+    values = {**values, "remote_id": rid}
+    cols = list(values.keys())
+    placeholders = ",".join(["?"] * len(cols))
+    update_clause = ", ".join(f"{c}=excluded.{c}" for c in update_cols)
+    sql = (
+        f"INSERT INTO {table} ({','.join(cols)}) VALUES ({placeholders}) "
+        f"ON CONFLICT(remote_id) DO UPDATE SET {update_clause} "
+        f"WHERE excluded.updated_at >= {table}.updated_at"
+    )
+    await db.execute(sql, [values[c] for c in cols])
+    return rid
+
+
+# Tombstones don't cascade through the FK (that only fires on physical DELETE), so we
+# propagate deleted_at manually. Any chat under the project (or message under the chat)
+# that isn't already tombstoned earlier than this call gets marked.
 async def _cascade_delete_chats(db: aiosqlite.Connection, project_remote_id: str, deleted_at: int) -> None:
-    # Tombstones don't cascade through the FK (that only fires on physical
-    # DELETE), so we propagate deleted_at manually. Any chat under the project
-    # that isn't already tombstoned earlier than this call gets marked.
     await db.execute(
         """UPDATE chats
               SET deleted_at = ?, updated_at = ?
@@ -116,194 +158,141 @@ async def _cascade_delete_messages(db: aiosqlite.Connection, chat_remote_id: str
     )
 
 
+# ── Per-entity upsert wrappers ───────────────────────────────────────────────
+
+_PROJECT_UPDATE_COLS = [
+    "name", "description", "manual_context", "accumulated_memory",
+    "pinned_memories", "preferred_backend", "memory_token_limit",
+    "context_length", "is_secret", "updated_at", "deleted_at",
+]
+_CHAT_UPDATE_COLS = ["title", "web_search_enabled", "updated_at", "deleted_at"]
+_MESSAGE_UPDATE_COLS = ["content", "token_count", "updated_at", "deleted_at"]
+_QUICK_ACTION_UPDATE_COLS = [
+    "name", "prompt_template", "sort_order", "updated_at", "deleted_at",
+]
+
+
+def _bool_to_int(values: dict[str, Any], *fields: str) -> dict[str, Any]:
+    """SQLite has no bool — coerce the named fields to 0/1 so the row matches the column type."""
+    for f in fields:
+        values[f] = int(values[f])
+    return values
+
+
 async def _upsert_project(db: aiosqlite.Connection, item: ProjectItem) -> str:
-    rid = item.remote_id or str(uuid.uuid4())
-    await db.execute(
-        """INSERT INTO projects
-           (remote_id,name,description,manual_context,accumulated_memory,pinned_memories,
-            preferred_backend,memory_token_limit,context_length,is_secret,created_at,updated_at,deleted_at)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
-           ON CONFLICT(remote_id) DO UPDATE SET
-             name=excluded.name, description=excluded.description,
-             manual_context=excluded.manual_context, accumulated_memory=excluded.accumulated_memory,
-             pinned_memories=excluded.pinned_memories, preferred_backend=excluded.preferred_backend,
-             memory_token_limit=excluded.memory_token_limit, context_length=excluded.context_length,
-             is_secret=excluded.is_secret, updated_at=excluded.updated_at, deleted_at=excluded.deleted_at
-           WHERE excluded.updated_at >= projects.updated_at""",
-        (rid, item.name, item.description, item.manual_context, item.accumulated_memory,
-         item.pinned_memories, item.preferred_backend, item.memory_token_limit,
-         item.context_length, int(item.is_secret), item.created_at, item.updated_at, item.deleted_at),
-    )
+    rid = await _upsert(db, "projects",
+                        _bool_to_int(item.model_dump(), "is_secret"),
+                        _PROJECT_UPDATE_COLS)
     if item.deleted_at is not None:
         await _cascade_delete_chats(db, rid, item.deleted_at)
     return rid
 
 
 async def _upsert_chat(db: aiosqlite.Connection, item: ChatItem) -> str:
-    rid = item.remote_id or str(uuid.uuid4())
-    await db.execute(
-        """INSERT INTO chats
-           (remote_id,project_remote_id,title,web_search_enabled,created_at,updated_at,deleted_at)
-           VALUES (?,?,?,?,?,?,?)
-           ON CONFLICT(remote_id) DO UPDATE SET
-             title=excluded.title, web_search_enabled=excluded.web_search_enabled,
-             updated_at=excluded.updated_at, deleted_at=excluded.deleted_at
-           WHERE excluded.updated_at >= chats.updated_at""",
-        (rid, item.project_remote_id, item.title, int(item.web_search_enabled),
-         item.created_at, item.updated_at, item.deleted_at),
-    )
+    rid = await _upsert(db, "chats",
+                        _bool_to_int(item.model_dump(), "web_search_enabled"),
+                        _CHAT_UPDATE_COLS)
     if item.deleted_at is not None:
         await _cascade_delete_messages(db, rid, item.deleted_at)
     return rid
 
 
 async def _upsert_message(db: aiosqlite.Connection, item: MessageItem) -> str:
-    rid = item.remote_id or str(uuid.uuid4())
-    await db.execute(
-        """INSERT INTO messages
-           (remote_id,chat_remote_id,role,content,token_count,attachment_paths,created_at,updated_at,deleted_at)
-           VALUES (?,?,?,?,?,?,?,?,?)
-           ON CONFLICT(remote_id) DO UPDATE SET
-             content=excluded.content, token_count=excluded.token_count,
-             updated_at=excluded.updated_at, deleted_at=excluded.deleted_at
-           WHERE excluded.updated_at >= messages.updated_at""",
-        (rid, item.chat_remote_id, item.role, item.content, item.token_count,
-         item.attachment_paths, item.created_at, item.updated_at, item.deleted_at),
-    )
-    return rid
+    return await _upsert(db, "messages", item.model_dump(), _MESSAGE_UPDATE_COLS)
 
 
 async def _upsert_quick_action(db: aiosqlite.Connection, item: QuickActionItem) -> str:
-    rid = item.remote_id or str(uuid.uuid4())
-    await db.execute(
-        """INSERT INTO quick_actions
-           (remote_id,project_remote_id,name,prompt_template,sort_order,created_at,updated_at,deleted_at)
-           VALUES (?,?,?,?,?,?,?,?)
-           ON CONFLICT(remote_id) DO UPDATE SET
-             name=excluded.name, prompt_template=excluded.prompt_template,
-             sort_order=excluded.sort_order, updated_at=excluded.updated_at, deleted_at=excluded.deleted_at
-           WHERE excluded.updated_at >= quick_actions.updated_at""",
-        (rid, item.project_remote_id, item.name, item.prompt_template,
-         item.sort_order, item.created_at, item.updated_at, item.deleted_at),
-    )
-    return rid
+    return await _upsert(db, "quick_actions", item.model_dump(), _QUICK_ACTION_UPDATE_COLS)
 
 
-# ── Full pull ─────────────────────────────────────────────────────────────────
+# ── Endpoint helpers ─────────────────────────────────────────────────────────
+
+async def _list_table(table: str, since: int, **filters) -> list[dict]:
+    """Connection-scoped wrapper around _fetch_rows used by every GET endpoint."""
+    async with _sync_db() as db:
+        return await _fetch_rows(db, table, since, **filters)
+
+
+async def _push_items(raw_items: list[Any], item_cls, upsert) -> dict:
+    """Validate, upsert, commit, and shape the response — used by every PUT endpoint."""
+    items = [item_cls(**i) for i in raw_items]
+    async with _sync_db() as db:
+        assigned = [await upsert(db, item) for item in items]
+        await db.commit()
+    return {"accepted": len(assigned), "remote_ids": assigned}
+
+
+# ── Full pull ────────────────────────────────────────────────────────────────
 
 @router.get("/v1/sync/full")
 async def sync_full(since: int = 0, _: None = Depends(require_auth)):
-    db = await get_db()
-    try:
-        projects = await _fetch_rows(db, "projects", since)
-        chats = await _fetch_rows(db, "chats", since)
-        messages = await _fetch_rows(db, "messages", since)
-        quick_actions = await _fetch_rows(db, "quick_actions", since)
-    finally:
-        await db.close()
-    return {"projects": projects, "chats": chats, "messages": messages, "quick_actions": quick_actions}
+    async with _sync_db() as db:
+        return {
+            "projects": await _fetch_rows(db, "projects", since),
+            "chats": await _fetch_rows(db, "chats", since),
+            "messages": await _fetch_rows(db, "messages", since),
+            "quick_actions": await _fetch_rows(db, "quick_actions", since),
+        }
 
 
-# ── Projects ──────────────────────────────────────────────────────────────────
+# ── Per-entity endpoints ─────────────────────────────────────────────────────
 
 @router.get("/v1/sync/projects")
 async def get_projects(since: int = 0, _: None = Depends(require_auth)):
-    db = await get_db()
-    try:
-        rows = await _fetch_rows(db, "projects", since)
-    finally:
-        await db.close()
-    return rows
+    return await _list_table("projects", since)
 
 
 @router.put("/v1/sync/projects")
 async def put_projects(body: PushBody, _: None = Depends(require_auth)):
-    items = [ProjectItem(**i) for i in body.items]
-    db = await get_db()
-    try:
-        assigned = [await _upsert_project(db, item) for item in items]
-        await db.commit()
-    finally:
-        await db.close()
-    return {"accepted": len(assigned), "remote_ids": assigned}
+    return await _push_items(body.items, ProjectItem, _upsert_project)
 
-
-# ── Chats ─────────────────────────────────────────────────────────────────────
 
 @router.get("/v1/sync/chats")
-async def get_chats(since: int = 0, project_remote_id: str | None = None, _: None = Depends(require_auth)):
-    db = await get_db()
-    try:
-        filters = {"project_remote_id": project_remote_id} if project_remote_id else {}
-        rows = await _fetch_rows(db, "chats", since, **filters)
-    finally:
-        await db.close()
-    return rows
+async def get_chats(
+    since: int = 0,
+    project_remote_id: str | None = None,
+    _: None = Depends(require_auth),
+):
+    filters = {"project_remote_id": project_remote_id} if project_remote_id else {}
+    return await _list_table("chats", since, **filters)
 
 
 @router.put("/v1/sync/chats")
 async def put_chats(body: PushBody, _: None = Depends(require_auth)):
-    items = [ChatItem(**i) for i in body.items]
-    db = await get_db()
-    try:
-        assigned = [await _upsert_chat(db, item) for item in items]
-        await db.commit()
-    finally:
-        await db.close()
-    return {"accepted": len(assigned), "remote_ids": assigned}
+    return await _push_items(body.items, ChatItem, _upsert_chat)
 
-
-# ── Messages ──────────────────────────────────────────────────────────────────
 
 @router.get("/v1/sync/messages")
-async def get_messages(since: int = 0, chat_remote_id: str | None = None, _: None = Depends(require_auth)):
-    db = await get_db()
-    try:
-        filters = {"chat_remote_id": chat_remote_id} if chat_remote_id else {}
-        rows = await _fetch_rows(db, "messages", since, **filters)
-    finally:
-        await db.close()
-    return rows
+async def get_messages(
+    since: int = 0,
+    chat_remote_id: str | None = None,
+    _: None = Depends(require_auth),
+):
+    filters = {"chat_remote_id": chat_remote_id} if chat_remote_id else {}
+    return await _list_table("messages", since, **filters)
 
 
 @router.put("/v1/sync/messages")
 async def put_messages(body: PushBody, _: None = Depends(require_auth)):
-    items = [MessageItem(**i) for i in body.items]
-    db = await get_db()
-    try:
-        assigned = [await _upsert_message(db, item) for item in items]
-        await db.commit()
-    finally:
-        await db.close()
-    return {"accepted": len(assigned), "remote_ids": assigned}
+    return await _push_items(body.items, MessageItem, _upsert_message)
 
-
-# ── Quick actions ─────────────────────────────────────────────────────────────
 
 @router.get("/v1/sync/quick_actions")
-async def get_quick_actions(since: int = 0, project_remote_id: str | None = None, _: None = Depends(require_auth)):
-    db = await get_db()
-    try:
-        filters = {"project_remote_id": project_remote_id} if project_remote_id else {}
-        rows = await _fetch_rows(db, "quick_actions", since, **filters)
-    finally:
-        await db.close()
-    return rows
+async def get_quick_actions(
+    since: int = 0,
+    project_remote_id: str | None = None,
+    _: None = Depends(require_auth),
+):
+    filters = {"project_remote_id": project_remote_id} if project_remote_id else {}
+    return await _list_table("quick_actions", since, **filters)
 
 
 @router.put("/v1/sync/quick_actions")
 async def put_quick_actions(body: PushBody, _: None = Depends(require_auth)):
-    items = [QuickActionItem(**i) for i in body.items]
-    db = await get_db()
-    try:
-        assigned = [await _upsert_quick_action(db, item) for item in items]
-        await db.commit()
-    finally:
-        await db.close()
-    return {"accepted": len(assigned), "remote_ids": assigned}
+    return await _push_items(body.items, QuickActionItem, _upsert_quick_action)
 
 
-# ── Global context ────────────────────────────────────────────────────────────
+# ── Global context ───────────────────────────────────────────────────────────
 
 class GlobalContext(BaseModel):
     user_name: str = ""
@@ -313,14 +302,11 @@ class GlobalContext(BaseModel):
 
 @router.get("/v1/global_context")
 async def get_global_context(_: None = Depends(require_auth)) -> GlobalContext:
-    db = await get_db()
-    try:
+    async with _sync_db() as db:
         async with db.execute(
             "SELECT user_name, rules, updated_at FROM global_context WHERE id = 1"
         ) as cur:
             row = await cur.fetchone()
-    finally:
-        await db.close()
     if row is None:
         return GlobalContext()
     return GlobalContext(user_name=row["user_name"], rules=row["rules"], updated_at=row["updated_at"])
@@ -329,8 +315,7 @@ async def get_global_context(_: None = Depends(require_auth)) -> GlobalContext:
 @router.put("/v1/global_context")
 async def put_global_context(body: GlobalContext, _: None = Depends(require_auth)) -> GlobalContext:
     now = int(time.time() * 1000)
-    db = await get_db()
-    try:
+    async with _sync_db() as db:
         # Last-write-wins on `updated_at`: an older write (stale tab) loses to a
         # newer one. Matches how the rest of the sync tables resolve conflicts.
         await db.execute(
@@ -344,6 +329,4 @@ async def put_global_context(body: GlobalContext, _: None = Depends(require_auth
             "SELECT user_name, rules, updated_at FROM global_context WHERE id = 1"
         ) as cur:
             row = await cur.fetchone()
-    finally:
-        await db.close()
     return GlobalContext(user_name=row["user_name"], rules=row["rules"], updated_at=row["updated_at"])
