@@ -1,0 +1,5 @@
+.page {
+  padding: var(--space-xl);
+  overflow-y: auto;
+  flex: 1;
+}

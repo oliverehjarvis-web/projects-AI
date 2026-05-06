@@ -6,6 +6,7 @@ import Button from "../ui/Button";
 import Card from "../ui/Card";
 import Dialog from "../ui/Dialog";
 import { Label, TextInput } from "../ui/Field";
+import PageContainer from "../ui/PageContainer";
 import { palette, font } from "../theme";
 
 export default function ProjectList() {
@@ -51,7 +52,7 @@ export default function ProjectList() {
   };
 
   return (
-    <div style={{ padding: 24, overflowY: "auto", flex: 1 }}>
+    <PageContainer>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 20 }}>
         <h1 style={{ fontSize: 22, fontWeight: 700, color: palette.text, margin: 0 }}>Projects</h1>
         <Button onClick={() => setDialogOpen(true)}>+ New project</Button>
@@ -118,6 +119,6 @@ export default function ProjectList() {
           </Button>
         </div>
       </Dialog>
-    </div>
+    </PageContainer>
   );
 }

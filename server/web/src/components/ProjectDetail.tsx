@@ -19,6 +19,7 @@ import Card from "../ui/Card";
 import Section from "../ui/Section";
 import { Label, Hint, TextInput, TextArea } from "../ui/Field";
 import Dialog from "../ui/Dialog";
+import PageContainer from "../ui/PageContainer";
 import { palette, radius, space, font } from "../theme";
 
 export default function ProjectDetail() {
@@ -192,7 +193,7 @@ export default function ProjectDetail() {
   const visibleQa = qaList.filter((q) => !q.deleted_at).sort((a, b) => a.sort_order - b.sort_order);
 
   return (
-    <div style={{ padding: 24, overflowY: "auto", flex: 1 }}>
+    <PageContainer>
       <span
         onClick={() => nav("/projects")}
         style={{
@@ -370,7 +371,7 @@ export default function ProjectDetail() {
           onSave={handleSaveQa}
         />
       )}
-    </div>
+    </PageContainer>
   );
 }
 

@@ -9,6 +9,7 @@ import Button from "../ui/Button";
 import Card from "../ui/Card";
 import Section from "../ui/Section";
 import { Label, Hint, TextInput, TextArea, Select } from "../ui/Field";
+import PageContainer from "../ui/PageContainer";
 import { palette, radius, font } from "../theme";
 
 interface PullState { status: string; pct: number | null; error?: string }
@@ -137,7 +138,7 @@ export default function Settings() {
   };
 
   return (
-    <div style={{ padding: 24, maxWidth: 720, overflowY: "auto", flex: 1 }}>
+    <PageContainer>
       <h1 style={{ fontSize: 22, fontWeight: 700, color: palette.text, margin: "0 0 24px" }}>Settings</h1>
 
       <Section title="Server connection">
@@ -371,7 +372,7 @@ export default function Settings() {
           </div>
         ))}
       </Section>
-    </div>
+    </PageContainer>
   );
 }
 

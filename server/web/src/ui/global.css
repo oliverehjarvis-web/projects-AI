@@ -1,19 +1,68 @@
 /* Global resets + utilities used by primitives. Imported once from main.tsx. */
 
+/* Theme tokens. Mirrored from theme.ts so CSS Modules can reference them directly via
+   `var(--palette-bg)` etc. — keep the two in sync when changing values. The TypeScript
+   constants stay for the (rare) places that build inline styles dynamically. */
 :root {
   color-scheme: dark;
+
+  /* palette */
+  --palette-bg: #0d0d0d;
+  --palette-surface: #1a1a1a;
+  --palette-surface-variant: #222;
+  --palette-surface-elevated: #262626;
+  --palette-border: #2a2a2a;
+  --palette-border-strong: #3a3a3a;
+  --palette-primary: #2563eb;
+  --palette-primary-hover: #1d4ed8;
+  --palette-primary-container: #172554;
+  --palette-on-primary: #fff;
+  --palette-text: #e4e4e7;
+  --palette-text-muted: #a1a1aa;
+  --palette-text-dim: #71717a;
+  --palette-success: #22c55e;
+  --palette-success-container: #14532d;
+  --palette-warning: #f59e0b;
+  --palette-warning-container: #451a03;
+  --palette-error: #ef4444;
+  --palette-error-container: #3a1d1d;
+  --palette-on-error-container: #fecaca;
+
+  /* spacing */
+  --space-xs: 4px;
+  --space-sm: 8px;
+  --space-md: 12px;
+  --space-lg: 16px;
+  --space-xl: 24px;
+  --space-xxl: 32px;
+
+  /* radius */
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-pill: 999px;
+
+  /* font sizes */
+  --font-body: 14px;
+  --font-body-sm: 13px;
+  --font-label: 12px;
+  --font-caption: 11px;
+  --font-title: 22px;
+  --font-section-title: 13px;
+
+  --shadow-pop: 0 6px 24px rgba(0, 0, 0, 0.45);
 }
 
 html, body, #root {
   margin: 0;
   padding: 0;
   height: 100%;
-  background: #0d0d0d;
-  color: #e4e4e7;
+  background: var(--palette-bg);
+  color: var(--palette-text);
   font-family:
     -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen, Ubuntu,
     Cantarell, "Open Sans", "Helvetica Neue", sans-serif;
-  font-size: 14px;
+  font-size: var(--font-body);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
@@ -23,23 +72,23 @@ input:focus-visible,
 textarea:focus-visible,
 select:focus-visible,
 a:focus-visible {
-  outline: 2px solid #2563eb;
+  outline: 2px solid var(--palette-primary);
   outline-offset: 2px;
 }
 
 input:focus, textarea:focus, select:focus {
-  border-color: #2563eb !important;
+  border-color: var(--palette-primary) !important;
 }
 
 *::selection {
-  background: #2563eb;
+  background: var(--palette-primary);
   color: #fff;
 }
 
 /* Custom scrollbars so the dark theme doesn't get bright Chrome scrollbars on macOS. */
 *::-webkit-scrollbar { width: 10px; height: 10px; }
-*::-webkit-scrollbar-thumb { background: #2a2a2a; border-radius: 5px; }
-*::-webkit-scrollbar-thumb:hover { background: #3a3a3a; }
+*::-webkit-scrollbar-thumb { background: var(--palette-border); border-radius: 5px; }
+*::-webkit-scrollbar-thumb:hover { background: var(--palette-border-strong); }
 *::-webkit-scrollbar-track { background: transparent; }
 
 @keyframes spin {

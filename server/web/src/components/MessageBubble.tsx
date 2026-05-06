@@ -2,7 +2,7 @@ import { useState } from "react";
 import Markdown from "react-markdown";
 import type { Message } from "../api/sync";
 import { useStore } from "../store/useStore";
-import { palette, radius, space, font } from "../theme";
+import styles from "./MessageBubble.module.css";
 
 interface Props {
   msg: Message;
@@ -11,98 +11,6 @@ interface Props {
   onRegenerate?: () => void;
   isStreaming?: boolean;
 }
-
-const styles: Record<string, React.CSSProperties> = {
-  wrap: { display: "flex", marginBottom: space.md, flexDirection: "column" },
-  wrapUser: { alignItems: "flex-end" },
-  wrapAssistant: { alignItems: "flex-start" },
-  bubbleBase: {
-    maxWidth: "78%",
-    padding: "10px 14px",
-    borderRadius: 16,
-    fontSize: font.body,
-    lineHeight: 1.6,
-    wordBreak: "break-word",
-    userSelect: "text",
-    WebkitUserSelect: "text",
-  },
-  user: { background: palette.primary, color: palette.onPrimary, borderBottomRightRadius: 4 },
-  assistant: {
-    background: palette.surface,
-    color: palette.text,
-    borderBottomLeftRadius: 4,
-    border: `1px solid ${palette.border}`,
-  },
-  thinking: {
-    background: "#141414",
-    border: `1px solid ${palette.border}`,
-    borderRadius: 10,
-    margin: "6px 0",
-    fontSize: font.bodySm,
-    color: palette.textMuted,
-  },
-  thinkingSummary: {
-    cursor: "pointer",
-    padding: "6px 10px",
-    userSelect: "none",
-    color: palette.textMuted,
-    fontSize: font.label,
-  },
-  thinkingBody: { padding: "4px 12px 10px", whiteSpace: "pre-wrap" as const },
-  codeWrap: {
-    background: palette.bg,
-    border: `1px solid ${palette.border}`,
-    borderRadius: radius.md,
-    margin: "8px 0",
-    overflow: "hidden",
-    maxWidth: "100%",
-  },
-  codeHeader: {
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "space-between",
-    padding: "4px 10px",
-    background: "#111",
-    borderBottom: `1px solid ${palette.border}`,
-    fontSize: 11,
-    color: palette.textMuted,
-    textTransform: "lowercase" as const,
-  },
-  codeBody: {
-    padding: "10px 12px",
-    margin: 0,
-    fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
-    fontSize: 12.5,
-    lineHeight: 1.5,
-    color: palette.text,
-    overflowX: "auto" as const,
-    whiteSpace: "pre" as const,
-  },
-  copyBtn: {
-    background: "transparent",
-    border: `1px solid ${palette.border}`,
-    color: palette.textMuted,
-    borderRadius: radius.sm,
-    fontSize: 11,
-    padding: "2px 8px",
-    cursor: "pointer",
-  },
-  msgActions: {
-    display: "flex",
-    gap: 6,
-    marginTop: 4,
-    fontSize: 11,
-  },
-  actionBtn: {
-    background: "transparent",
-    border: `1px solid ${palette.border}`,
-    color: palette.textMuted,
-    borderRadius: radius.sm,
-    fontSize: 11,
-    padding: "3px 9px",
-    cursor: "pointer",
-  },
-};
 
 type Segment = { kind: "text" | "think"; text: string; closed: boolean };
 
@@ -149,14 +57,14 @@ function CodeBlock({ lang, code, onCopied }: { lang: string; code: string; onCop
     }
   };
   return (
-    <div style={styles.codeWrap}>
-      <div style={styles.codeHeader}>
+    <div className={styles.codeWrap}>
+      <div className={styles.codeHeader}>
         <span>{lang || "code"}</span>
-        <button style={styles.copyBtn} onClick={handleCopy}>
+        <button className={styles.copyBtn} onClick={handleCopy}>
           {copied ? "Copied" : "Copy"}
         </button>
       </div>
-      <pre style={styles.codeBody}>{code}</pre>
+      <pre className={styles.codeBody}>{code}</pre>
     </div>
   );
 }
@@ -167,22 +75,22 @@ export default function MessageBubble({ msg, canRegenerate, onRegenerate, isStre
 
   if (isUser) {
     return (
-      <div style={{ ...styles.wrap, ...styles.wrapUser }}>
-        <div style={{ ...styles.bubbleBase, ...styles.user }}>{msg.content}</div>
+      <div className={`${styles.wrap} ${styles.wrapUser}`}>
+        <div className={`${styles.bubble} ${styles.bubbleUser}`}>{msg.content}</div>
       </div>
     );
   }
   const segments = parseSegments(msg.content);
   return (
-    <div style={{ ...styles.wrap, ...styles.wrapAssistant }}>
-      <div style={{ ...styles.bubbleBase, ...styles.assistant }}>
+    <div className={`${styles.wrap} ${styles.wrapAssistant}`}>
+      <div className={`${styles.bubble} ${styles.bubbleAssistant}`}>
         {segments.map((seg, i) =>
           seg.kind === "think" ? (
-            <details key={i} style={styles.thinking} open={!seg.closed}>
-              <summary style={styles.thinkingSummary}>
+            <details key={i} className={styles.thinking} open={!seg.closed}>
+              <summary className={styles.thinkingSummary}>
                 {seg.closed ? "Thinking" : "Thinking…"}
               </summary>
-              <div style={styles.thinkingBody}>{seg.text.trim()}</div>
+              <div className={styles.thinkingBody}>{seg.text.trim()}</div>
             </details>
           ) : seg.text.trim() ? (
             <Markdown
@@ -211,9 +119,9 @@ export default function MessageBubble({ msg, canRegenerate, onRegenerate, isStre
         )}
       </div>
       {!isStreaming && (
-        <div style={styles.msgActions}>
+        <div className={styles.msgActions}>
           <button
-            style={styles.actionBtn}
+            className={styles.actionBtn}
             onClick={async () => {
               if (await copyText(msg.content)) pushSnack("Copied message");
             }}
@@ -221,7 +129,7 @@ export default function MessageBubble({ msg, canRegenerate, onRegenerate, isStre
             Copy
           </button>
           {canRegenerate && onRegenerate && (
-            <button style={styles.actionBtn} onClick={onRegenerate}>
+            <button className={styles.actionBtn} onClick={onRegenerate}>
               ↻ Regenerate
             </button>
           )}

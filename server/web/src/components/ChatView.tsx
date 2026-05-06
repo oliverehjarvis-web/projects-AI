@@ -16,73 +16,8 @@ import MessageBubble from "./MessageBubble";
 import RepoBrowser from "./RepoBrowser";
 import IconButton from "../ui/IconButton";
 import Card from "../ui/Card";
-import { palette, radius, space, font } from "../theme";
 import type { Message } from "../api/sync";
-
-const styles: Record<string, React.CSSProperties> = {
-  page: { display: "flex", flexDirection: "column", height: "100%", background: palette.bg },
-  header: {
-    padding: "10px 20px",
-    borderBottom: `1px solid ${palette.border}`,
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "space-between",
-    gap: space.md,
-  },
-  headerTitle: { fontWeight: 600, color: palette.text, fontSize: 15, flex: 1, minWidth: 0,
-    overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
-  toolbar: { display: "flex", alignItems: "center", gap: 4 },
-  messages: {
-    flex: 1,
-    overflowY: "auto",
-    padding: `${space.lg}px ${space.xl}px`,
-    position: "relative",
-  },
-  inputRow: {
-    padding: "12px 20px",
-    borderTop: `1px solid ${palette.border}`,
-    display: "flex",
-    flexDirection: "column",
-    gap: space.sm,
-  },
-  composer: { display: "flex", gap: space.sm, alignItems: "flex-end" },
-  textarea: {
-    flex: 1,
-    background: palette.surface,
-    border: `1px solid ${palette.border}`,
-    borderRadius: radius.md,
-    color: palette.text,
-    padding: "10px 14px",
-    fontSize: font.body,
-    resize: "none",
-    outline: "none",
-    fontFamily: "inherit",
-  },
-  sendBtn: {
-    background: palette.primary,
-    color: palette.onPrimary,
-    border: "none",
-    borderRadius: radius.md,
-    padding: "10px 18px",
-    cursor: "pointer",
-    fontWeight: 600,
-    fontSize: 14,
-  },
-  jumpToLatest: {
-    position: "absolute",
-    bottom: 12,
-    left: "50%",
-    transform: "translateX(-50%)",
-    background: palette.surfaceElevated,
-    color: palette.text,
-    border: `1px solid ${palette.borderStrong}`,
-    borderRadius: radius.pill,
-    padding: "6px 14px",
-    cursor: "pointer",
-    fontSize: 12,
-    boxShadow: "0 4px 12px rgba(0,0,0,0.4)",
-  },
-};
+import styles from "./ChatView.module.css";
 
 export default function ChatView() {
   const { projectId, chatId } = useParams<{ projectId: string; chatId: string }>();
@@ -382,10 +317,10 @@ export default function ChatView() {
   };
 
   if (project?.is_secret) {
-    return <div style={{ padding: 24, color: palette.textDim }}>Chat not found.</div>;
+    return <div className={styles.placeholder}>Chat not found.</div>;
   }
   if (!project || !chat || !chatId) {
-    return <div style={{ padding: 24, color: palette.textDim }}>Loading…</div>;
+    return <div className={styles.placeholder}>Loading…</div>;
   }
 
   const filtered = msgList.filter((m) => m.role !== "system");
@@ -397,10 +332,10 @@ export default function ChatView() {
   })();
 
   return (
-    <div style={styles.page}>
-      <div style={styles.header}>
-        <span style={styles.headerTitle}>{chat.title}</span>
-        <div style={styles.toolbar}>
+    <div className={styles.page}>
+      <div className={styles.header}>
+        <span className={styles.headerTitle}>{chat.title}</span>
+        <div className={styles.toolbar}>
           <IconButton
             title="Browse GitHub repo"
             onClick={() => setShowRepoBrowser(true)}
@@ -428,7 +363,7 @@ export default function ChatView() {
           </IconButton>
         </div>
       </div>
-      <div style={styles.messages} ref={messagesRef}>
+      <div className={styles.messages} ref={messagesRef}>
         {filtered.map((m, i) => (
           <MessageBubble
             key={m.remote_id}
@@ -439,7 +374,7 @@ export default function ChatView() {
           />
         ))}
         {streaming && thinkingSince !== null && (
-          <div style={{ color: palette.textDim, fontSize: 13, padding: "8px 4px", fontStyle: "italic" }}>
+          <div className={styles.thinkingIndicator}>
             {thinkingElapsed < 5
               ? "Thinking…"
               : thinkingElapsed < 20
@@ -448,7 +383,7 @@ export default function ChatView() {
           </div>
         )}
         {searchStatus && (
-          <div style={{ color: palette.primary, fontSize: 13, padding: "4px 4px", fontStyle: "italic" }}>
+          <div className={styles.searchStatus}>
             🌐 {searchStatus}
           </div>
         )}
@@ -460,7 +395,7 @@ export default function ChatView() {
         <div ref={bottomRef} />
         {showJumpButton && (
           <button
-            style={styles.jumpToLatest}
+            className={styles.jumpToLatest}
             onClick={() => bottomRef.current?.scrollIntoView({ behavior: "smooth" })}
           >
             Jump to latest ↓
@@ -468,30 +403,22 @@ export default function ChatView() {
         )}
       </div>
       {stagedFiles && stagedFiles.files.length > 0 && (
-        <div style={{ padding: "0 20px" }}>
+        <div className={styles.stagedFilesWrap}>
           <Card tone="primary" padding={10} style={{ marginBottom: 8 }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 10, fontSize: 13 }}>
+            <div className={styles.stagedFilesRow}>
               <span>📎</span>
-              <div style={{ flex: 1 }}>
-                <div style={{ color: palette.text, fontWeight: 500 }}>
+              <div className={styles.stagedFilesGrow}>
+                <div className={styles.stagedFilesTitle}>
                   {stagedFiles.files.length} file{stagedFiles.files.length === 1 ? "" : "s"} from{" "}
                   {stagedFiles.owner}/{stagedFiles.repo}
                 </div>
-                <div style={{ color: palette.textMuted, fontSize: 11 }}>
+                <div className={styles.stagedFilesMeta}>
                   Attached to your next message · ≈
                   {Math.ceil(stagedFiles.files.reduce((a, f) => a + f.text.length, 0) / 4 / 1000)}k tokens
                 </div>
               </div>
               <button
-                style={{
-                  background: "transparent",
-                  border: `1px solid ${palette.border}`,
-                  color: palette.textMuted,
-                  borderRadius: radius.sm,
-                  padding: "4px 10px",
-                  fontSize: 12,
-                  cursor: "pointer",
-                }}
+                className={styles.stagedFilesClear}
                 onClick={() => chatId && clearStagedRepoFiles(chatId)}
               >
                 Clear
@@ -500,10 +427,10 @@ export default function ChatView() {
           </Card>
         </div>
       )}
-      <div style={styles.inputRow}>
-        <div style={styles.composer}>
+      <div className={styles.inputRow}>
+        <div className={styles.composer}>
           <textarea
-            style={styles.textarea}
+            className={styles.textarea}
             rows={2}
             value={input}
             onChange={(e) => setInput(e.target.value)}
@@ -512,10 +439,7 @@ export default function ChatView() {
             disabled={streaming}
           />
           <button
-            style={{
-              ...styles.sendBtn,
-              ...(streaming ? { background: palette.surfaceVariant } : {}),
-            }}
+            className={`${styles.sendBtn} ${streaming ? styles.sendBtnStreaming : ""}`}
             onClick={streaming ? () => abortRef.current?.abort() : send}
           >
             {streaming ? "Stop" : "Send"}

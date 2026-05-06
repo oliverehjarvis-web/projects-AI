@@ -6,6 +6,7 @@ import { refineText } from "../api/refine";
 import Button from "../ui/Button";
 import { TextArea } from "../ui/Field";
 import Card from "../ui/Card";
+import PageContainer from "../ui/PageContainer";
 import { palette, radius, space, font } from "../theme";
 
 export default function MemoryScreen() {
@@ -70,7 +71,7 @@ export default function MemoryScreen() {
   const pct = Math.min(100, (tokens / limit) * 100);
 
   return (
-    <div style={{ padding: 24, overflowY: "auto", flex: 1, maxWidth: 800 }}>
+    <PageContainer maxWidth={800}>
       <span
         onClick={() => nav(`/projects/${projectId}`)}
         style={{
@@ -127,6 +128,6 @@ export default function MemoryScreen() {
           {saving ? "Saving…" : "Save"}
         </Button>
       </div>
-    </div>
+    </PageContainer>
   );
 }
