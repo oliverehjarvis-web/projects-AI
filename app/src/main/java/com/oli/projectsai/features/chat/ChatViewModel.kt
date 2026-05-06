@@ -3,10 +3,6 @@ package com.oli.projectsai.features.chat
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
-import android.os.Bundle
-import android.speech.RecognitionListener
-import android.speech.RecognizerIntent
-import android.speech.SpeechRecognizer
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
@@ -35,7 +31,6 @@ import com.oli.projectsai.core.ui.common.shareText
 import com.oli.projectsai.core.ui.components.TokenBreakdown
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
-import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -111,25 +106,10 @@ class ChatViewModel @Inject constructor(
     private val _pendingAttachments = MutableStateFlow<List<String>>(emptyList())
     val pendingAttachments: StateFlow<List<String>> = _pendingAttachments.asStateFlow()
 
-    sealed class DictationState {
-        data object Idle : DictationState()
-        /** Microphone open, audio streaming. [partialText] updates in real time as words are recognised. */
-        data class Recording(val partialText: String = "") : DictationState()
-        data object Transcribing : DictationState()
-        data class Error(val message: String) : DictationState()
-    }
-
-    private val _dictationState = MutableStateFlow<DictationState>(DictationState.Idle)
-    val dictationState: StateFlow<DictationState> = _dictationState.asStateFlow()
-
-    private val _transcribedText = MutableStateFlow<String?>(null)
-    val transcribedText: StateFlow<String?> = _transcribedText.asStateFlow()
-
-    /** Normalised mic level 0..1, updated ~10 Hz while recording. Drives the waveform bars. */
-    private val _dictationRms = MutableStateFlow(0f)
-    val dictationRms: StateFlow<Float> = _dictationRms.asStateFlow()
-
-    private var speechRecognizer: SpeechRecognizer? = null
+    private val dictationManager = DictationManager(appContext)
+    val dictationState: StateFlow<DictationState> = dictationManager.state
+    val dictationRms: StateFlow<Float> = dictationManager.rms
+    val transcribedText: StateFlow<String?> = dictationManager.transcribed
 
     private val _chatTitle = MutableStateFlow("New Chat")
     val chatTitle: StateFlow<String> = _chatTitle.asStateFlow()
@@ -157,7 +137,9 @@ class ChatViewModel @Inject constructor(
                     val p = projectRepository.getProject(contextProjectId)
                     if (p != null) {
                         contextMemoryTokenLimit = p.memoryTokenLimit
-                        systemPrompt = buildSystemPrompt(name, rules, p.manualContext, p.accumulatedMemory)
+                        systemPrompt = PromptBuilder.buildSystemPrompt(
+                            name, rules, p.manualContext, p.accumulatedMemory, contextMemoryTokenLimit,
+                        )
                         refreshContextTokenBreakdown(name, rules, p.manualContext, p.accumulatedMemory)
                     }
                 }
@@ -215,7 +197,9 @@ class ChatViewModel @Inject constructor(
         contextWindowTokens = project.contextLength
         val name = globalContextStore.name.first()
         val rules = globalContextStore.rules.first()
-        systemPrompt = buildSystemPrompt(name, rules, project.manualContext, project.accumulatedMemory)
+        systemPrompt = PromptBuilder.buildSystemPrompt(
+            name, rules, project.manualContext, project.accumulatedMemory, contextMemoryTokenLimit,
+        )
         refreshContextTokenBreakdown(name, rules, project.manualContext, project.accumulatedMemory)
         reloadModelIfContextDiffers(project.contextLength)
     }
@@ -228,69 +212,23 @@ class ChatViewModel @Inject constructor(
         }
     }
 
-    private fun trimMemoryToLimit(memory: String): String {
-        if (contextMemoryTokenLimit >= Int.MAX_VALUE || contextMemoryTokenLimit <= 0) return memory
-        val charBudget = contextMemoryTokenLimit * 4  // ~4 chars/token (Gemma SentencePiece calibrated)
-        return if (memory.length > charBudget) {
-            memory.take(charBudget) + "\n[memory truncated — compress in Memory settings]"
-        } else memory
-    }
-
-    private fun buildSystemPrompt(
-        name: String,
-        rules: String,
-        manualContext: String,
-        memory: String
-    ): String = buildList {
-        val globalBlock = buildGlobalBlock(name, rules)
-        if (globalBlock.isNotBlank()) add(globalBlock)
-        if (manualContext.isNotBlank()) add("<project_context>\n$manualContext\n</project_context>")
-        if (memory.isNotBlank()) add("<memory>\n${trimMemoryToLimit(memory)}\n</memory>")
-    }.joinToString("\n\n")
-
-    /** Wraps the staged repo files in an XML block the model can refer back to. */
-    private fun buildRepoContextBlock(selection: RepoSelectionStore.Selection?): String {
-        if (selection == null || selection.files.isEmpty()) return ""
-        val header = "<repo_context owner=\"${selection.owner}\" repo=\"${selection.repo}\" ref=\"${selection.ref}\">"
-        val body = selection.files.joinToString("\n") { f ->
-            "<file path=\"${f.path}\">\n${f.text}\n</file>"
-        }
-        return "$header\n$body\n</repo_context>"
-    }
-
     private suspend fun refreshContextTokenBreakdown(
         name: String,
         rules: String,
         manualContext: String,
-        memory: String
+        memory: String,
     ) {
         val systemText = listOfNotNull(
-            buildGlobalBlock(name, rules).ifBlank { null },
-            manualContext.ifBlank { null }
+            PromptBuilder.buildGlobalBlock(name, rules).ifBlank { null },
+            manualContext.ifBlank { null },
         ).joinToString("\n\n")
         _tokenBreakdown.value = _tokenBreakdown.value.copy(
             systemPrompt = inferenceManager.countTokens(systemText),
-            memory = inferenceManager.countTokens(trimMemoryToLimit(memory)),
-            contextLimit = inferenceManager.contextLimitFlow.value
+            memory = inferenceManager.countTokens(
+                PromptBuilder.trimMemoryToLimit(memory, contextMemoryTokenLimit),
+            ),
+            contextLimit = inferenceManager.contextLimitFlow.value,
         )
-    }
-
-    private fun buildGlobalBlock(name: String, rules: String): String {
-        // Framed as soft preferences, not hard rules, and wrapped in <user_profile> so the model
-        // clearly distinguishes this section from project facts and memory. Phrasing matches the
-        // server-side preamble so thinking-capable models don't fall into a rule-checking loop
-        // where they re-evaluate each constraint against each draft reply — a 15-minute-thinking
-        // failure mode we hit before.
-        val parts = mutableListOf<String>()
-        if (name.isNotBlank()) parts.add("You are speaking with ${name.trim()}.")
-        if (rules.isNotBlank()) {
-            parts.add(
-                "The user has these standing guidelines (soft preferences — follow by default, " +
-                    "deviate with a brief note when a specific request needs it):\n${rules.trim()}"
-            )
-        }
-        if (parts.isEmpty()) return ""
-        return "<user_profile>\n${parts.joinToString("\n\n")}\n</user_profile>"
     }
 
     fun sendMessage(content: String) {
@@ -402,7 +340,7 @@ class ChatViewModel @Inject constructor(
         // turn. The block is then cleared so follow-up turns don't keep re-injecting them —
         // the user can re-stage from the browser whenever they need them again.
         val stagedSelection = repoSelectionStore.staged.value
-        val repoBlock = buildRepoContextBlock(stagedSelection)
+        val repoBlock = PromptBuilder.buildRepoContextBlock(stagedSelection)
         val effectiveSystemPrompt = if (repoBlock.isBlank()) systemPrompt
         else if (systemPrompt.isBlank()) repoBlock
         else "$systemPrompt\n\n$repoBlock"
@@ -433,105 +371,12 @@ class ChatViewModel @Inject constructor(
         }
     }
 
-    fun startDictation() {
-        if (_dictationState.value != DictationState.Idle) return
-        if (!SpeechRecognizer.isRecognitionAvailable(appContext)) {
-            _dictationState.value = DictationState.Error("Speech recognition is not available on this device.")
-            return
-        }
-        _transcribedText.value = null
-
-        val recognizer = SpeechRecognizer.createSpeechRecognizer(appContext)
-        speechRecognizer = recognizer
-        recognizer.setRecognitionListener(object : RecognitionListener {
-            override fun onReadyForSpeech(params: Bundle?) {
-                _dictationState.value = DictationState.Recording()
-            }
-            override fun onBeginningOfSpeech() {}
-            override fun onRmsChanged(rmsdB: Float) {
-                // onRmsChanged range is roughly -2..10; normalise to 0..1
-                _dictationRms.value = ((rmsdB + 2f) / 12f).coerceIn(0f, 1f)
-            }
-            override fun onBufferReceived(buffer: ByteArray?) {}
-            override fun onEndOfSpeech() {
-                _dictationState.value = DictationState.Transcribing
-            }
-            override fun onPartialResults(partialResults: Bundle?) {
-                val partial = partialResults
-                    ?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
-                    ?.firstOrNull().orEmpty()
-                _dictationState.value = DictationState.Recording(partialText = partial)
-            }
-            override fun onResults(results: Bundle?) {
-                val text = results
-                    ?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
-                    ?.firstOrNull().orEmpty()
-                _dictationRms.value = 0f
-                if (text.isNotBlank()) {
-                    _transcribedText.value = text
-                    _dictationState.value = DictationState.Idle
-                } else {
-                    _dictationState.value = DictationState.Error("Nothing was heard — try again.")
-                }
-                destroySpeechRecognizer()
-            }
-            override fun onError(error: Int) {
-                _dictationRms.value = 0f
-                _dictationState.value = DictationState.Error(
-                    when (error) {
-                        SpeechRecognizer.ERROR_AUDIO -> "Microphone error"
-                        SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS -> "Microphone permission needed"
-                        SpeechRecognizer.ERROR_NO_MATCH -> "Could not understand — try speaking more clearly"
-                        SpeechRecognizer.ERROR_RECOGNIZER_BUSY -> "Recogniser busy — try again"
-                        SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> "No speech detected — try again"
-                        SpeechRecognizer.ERROR_NETWORK,
-                        SpeechRecognizer.ERROR_NETWORK_TIMEOUT,
-                        SpeechRecognizer.ERROR_SERVER ->
-                            "Network error — enable offline speech in system Settings → General management → Language"
-                        else -> "Recognition failed"
-                    }
-                )
-                destroySpeechRecognizer()
-            }
-            override fun onEvent(eventType: Int, params: Bundle?) {}
-        })
-
-        val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
-            putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-            putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
-            putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true)
-            putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
-        }
-        recognizer.startListening(intent)
-    }
-
+    fun startDictation() = dictationManager.start()
     /** Finishes the current utterance and waits for the final result. */
-    fun stopDictation() {
-        speechRecognizer?.stopListening()
-    }
-
-    fun cancelDictation() {
-        _dictationRms.value = 0f
-        destroySpeechRecognizer()
-        _dictationState.value = DictationState.Idle
-    }
-
-    private fun destroySpeechRecognizer() {
-        speechRecognizer?.destroy()
-        speechRecognizer = null
-    }
-
-    fun consumeTranscribedText(): String? {
-        val text = _transcribedText.value
-        _transcribedText.value = null
-        return text
-    }
-
-    fun dismissDictationError() {
-        if (_dictationState.value is DictationState.Error) {
-            _dictationState.value = DictationState.Idle
-        }
-    }
+    fun stopDictation() = dictationManager.stop()
+    fun cancelDictation() = dictationManager.cancel()
+    fun consumeTranscribedText(): String? = dictationManager.consumeTranscribed()
+    fun dismissDictationError() = dictationManager.dismissError()
 
     private suspend fun updateTokenBreakdown() {
         val joined = _messages.value.joinToString("\n") { it.content }
@@ -597,7 +442,7 @@ class ChatViewModel @Inject constructor(
     fun dismissError() { generationController.clearError(activeChatId) }
 
     override fun onCleared() {
-        destroySpeechRecognizer()
+        dictationManager.close()
         super.onCleared()
     }
 }

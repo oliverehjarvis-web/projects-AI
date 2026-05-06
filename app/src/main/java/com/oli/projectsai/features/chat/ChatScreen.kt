@@ -407,8 +407,8 @@ fun ChatScreen(
                         Icon(Icons.Default.AttachFile, "Attach image")
                     }
 
-                    val isRecording = dictationState is ChatViewModel.DictationState.Recording
-                    val isTranscribing = dictationState is ChatViewModel.DictationState.Transcribing
+                    val isRecording = dictationState is DictationState.Recording
+                    val isTranscribing = dictationState is DictationState.Transcribing
                     if (isRecording) {
                         RecordingMicButton(onStop = { viewModel.stopDictation() })
                     } else {
@@ -524,12 +524,12 @@ private fun ThinkingIndicator() {
 
 @Composable
 private fun DictationBanner(
-    state: ChatViewModel.DictationState,
+    state: DictationState,
     rms: Float,
     onDismissError: () -> Unit
 ) {
     when (state) {
-        is ChatViewModel.DictationState.Recording -> {
+        is DictationState.Recording -> {
             Card(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -562,7 +562,7 @@ private fun DictationBanner(
                 }
             }
         }
-        is ChatViewModel.DictationState.Transcribing -> {
+        is DictationState.Transcribing -> {
             Card(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -578,7 +578,7 @@ private fun DictationBanner(
                 }
             }
         }
-        is ChatViewModel.DictationState.Error -> {
+        is DictationState.Error -> {
             Card(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -603,7 +603,7 @@ private fun DictationBanner(
                 }
             }
         }
-        ChatViewModel.DictationState.Idle -> Unit
+        DictationState.Idle -> Unit
     }
 }
 
