@@ -1,13 +1,10 @@
 package com.oli.projectsai.core.inference
 
-import com.oli.projectsai.core.attachments.AttachmentStore
 import com.oli.projectsai.core.db.entity.Message
 import com.oli.projectsai.core.db.entity.MessageRole
 import com.oli.projectsai.core.preferences.SearchDepth
 import com.oli.projectsai.core.preferences.SearchSettings
 import com.oli.projectsai.core.repository.ChatRepository
-import com.oli.projectsai.core.search.PageFetcher
-import com.oli.projectsai.core.search.WebSearchClient
 import com.oli.projectsai.di.ApplicationScope
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -28,18 +25,29 @@ data class ActiveGeneration(
     val streamingContent: String,
     val isGenerating: Boolean,
     val searchStatus: String?,
-    val titleHint: String
+    val titleHint: String,
 )
 
+/**
+ * Coordinates a chat-level generation: pulls the message history, composes the system prompt,
+ * dispatches to the right run-mode (single turn / auto-fetch / tool loop), persists the
+ * assistant reply, and exposes a single [activeGeneration] StateFlow the UI subscribes to.
+ *
+ * The actual generation work lives in two extracted helpers:
+ * - [MessageAssembler] resolves the wire-format ChatMessage list (DB + staged user turn).
+ * - [AgentRunner] owns the search/fetch agent flows when web search is on.
+ *
+ * Only the simple non-search [runSingleTurn] case stays inline here because it depends on the
+ * controller's own [scope] for the slow-response warning timer.
+ */
 @Singleton
 class GenerationController @Inject constructor(
     private val chatRepository: ChatRepository,
     private val inferenceManager: InferenceManager,
-    private val attachmentStore: AttachmentStore,
-    private val webSearchClient: WebSearchClient,
-    private val pageFetcher: PageFetcher,
+    private val messageAssembler: MessageAssembler,
+    private val agentRunner: AgentRunner,
     private val searchSettings: SearchSettings,
-    @ApplicationScope private val scope: CoroutineScope
+    @ApplicationScope private val scope: CoroutineScope,
 ) {
 
     private val _activeGeneration = MutableStateFlow<ActiveGeneration?>(null)
@@ -60,7 +68,7 @@ class GenerationController @Inject constructor(
             streamingContent = "",
             isGenerating = true,
             searchStatus = null,
-            titleHint = params.chatTitleHint
+            titleHint = params.chatTitleHint,
         )
         clearError(params.chatId)
         job = scope.launch { runGeneration(params) }
@@ -95,32 +103,14 @@ class GenerationController @Inject constructor(
         val fullResponse = StringBuilder()
         var cancelled = false
         try {
-            val msgs: List<Message> = chatRepository.getMessagesFlow(chatId).first()
-            val dbMessages = msgs.mapIndexed { idx, msg ->
-                val isLast = idx == msgs.lastIndex
-                val bytes = if (isLast && msg.role == MessageRole.USER) {
-                    msg.attachmentPaths.map { attachmentStore.readBytes(it) }
-                } else emptyList()
-                ChatMessage(
-                    role = msg.role.toWireRole(),
-                    content = msg.content,
-                    imageBytes = bytes
-                )
-            }
-            val chatMessages = if (params.currentUserContent != null &&
-                dbMessages.lastOrNull()?.content != params.currentUserContent
-            ) {
-                val bytes = params.currentAttachments.map { attachmentStore.readBytes(it) }
-                dbMessages + ChatMessage(
-                    role = "user",
-                    content = params.currentUserContent,
-                    imageBytes = bytes
-                )
-            } else {
-                dbMessages
-            }
+            val chatMessages = messageAssembler.assemble(
+                chatId = chatId,
+                currentUserContent = params.currentUserContent,
+                currentAttachments = params.currentAttachments,
+            )
 
-            val depth = if (params.webSearchEnabled) searchSettings.searchDepth.first() else SearchDepth.AUTO_FETCH
+            val depth = if (params.webSearchEnabled) searchSettings.searchDepth.first()
+                        else SearchDepth.AUTO_FETCH
             val toolInstructions = when {
                 !params.webSearchEnabled -> ""
                 depth == SearchDepth.TOOL_LOOP -> TOOL_LOOP_INSTRUCTIONS
@@ -135,12 +125,25 @@ class GenerationController @Inject constructor(
             val genConfig = GenerationConfig(
                 maxOutputTokens = params.maxOutputTokens,
                 applyDefaultPreamble = params.applyDefaultPreamble,
-                numCtx = params.numCtx
+                numCtx = params.numCtx,
             )
             cancelled = when (depth.takeIf { params.webSearchEnabled }) {
-                SearchDepth.TOOL_LOOP -> runToolLoop(chatMessages, effectiveSystemPrompt, fullResponse, params.backendId, genConfig)
-                SearchDepth.AUTO_FETCH -> runAutoFetch(chatMessages, effectiveSystemPrompt, fullResponse, params.backendId, genConfig)
-                null -> runSingleTurn(chatMessages, effectiveSystemPrompt, fullResponse, params.backendId, genConfig)
+                SearchDepth.TOOL_LOOP -> agentRunner.runToolLoop(
+                    chatMessages, effectiveSystemPrompt, fullResponse,
+                    params.backendId, genConfig,
+                    onStreaming = ::updateStreaming,
+                    onSearchStatus = ::updateSearchStatus,
+                )
+                SearchDepth.AUTO_FETCH -> agentRunner.runAutoFetch(
+                    chatMessages, effectiveSystemPrompt, fullResponse,
+                    params.backendId, genConfig,
+                    onStreaming = ::updateStreaming,
+                    onSearchStatus = ::updateSearchStatus,
+                )
+                null -> runSingleTurn(
+                    chatMessages, effectiveSystemPrompt, fullResponse,
+                    params.backendId, genConfig,
+                )
             }
         } catch (ie: InferenceError) {
             lastFailed[chatId] = LastFailed(params.currentUserContent, params.currentAttachments)
@@ -155,7 +158,7 @@ class GenerationController @Inject constructor(
                     is InferenceError.TranscriptionFailed,
                     is InferenceError.LoadFailed ->
                         ChatError(ie.message ?: "Generation failed.", retryable = true)
-                }
+                },
             )
         } catch (ce: CancellationException) {
             cancelled = true
@@ -173,8 +176,8 @@ class GenerationController @Inject constructor(
                             chatId = chatId,
                             role = MessageRole.ASSISTANT,
                             content = if (cancelled) "$responseText _(stopped)_" else responseText,
-                            tokenCount = inferenceManager.countTokens(responseText)
-                        )
+                            tokenCount = inferenceManager.countTokens(responseText),
+                        ),
                     )
                 }
             }
@@ -182,12 +185,17 @@ class GenerationController @Inject constructor(
         }
     }
 
+    /**
+     * Plain non-tool generation. Inlined here (rather than living in [AgentRunner]) because the
+     * slow-response warning uses [scope] to schedule a delayed status update — coupling we
+     * don't want to push down to the runner.
+     */
     private suspend fun runSingleTurn(
         chatMessages: List<ChatMessage>,
         systemPromptText: String,
         fullResponse: StringBuilder,
         backendId: String? = null,
-        config: GenerationConfig = GenerationConfig()
+        config: GenerationConfig = GenerationConfig(),
     ): Boolean {
         var firstTokenReceived = false
         var showingSlowWarning = false
@@ -201,7 +209,7 @@ class GenerationController @Inject constructor(
                 systemPrompt = systemPromptText,
                 messages = chatMessages,
                 config = config,
-                backendId = backendId
+                backendId = backendId,
             ).collect { token ->
                 if (!firstTokenReceived) {
                     firstTokenReceived = true
@@ -221,158 +229,4 @@ class GenerationController @Inject constructor(
             if (showingSlowWarning) updateSearchStatus(null)
         }
     }
-
-    private suspend fun runAutoFetch(
-        chatMessages: List<ChatMessage>,
-        systemPromptText: String,
-        fullResponse: StringBuilder,
-        backendId: String? = null,
-        config: GenerationConfig = GenerationConfig()
-    ): Boolean {
-        val firstBuf = StringBuilder()
-        var cancelled = try {
-            inferenceManager.generate(
-                systemPrompt = systemPromptText,
-                messages = chatMessages,
-                config = config,
-                backendId = backendId
-            ).collect { token ->
-                firstBuf.append(token)
-                updateStreaming(stripToolTags(firstBuf.toString()))
-            }
-            false
-        } catch (ce: CancellationException) { true }
-
-        val searchMatch = if (!cancelled) SEARCH_TAG_REGEX.find(firstBuf) else null
-        if (searchMatch == null) {
-            fullResponse.append(firstBuf)
-            return cancelled
-        }
-
-        val query = searchMatch.groupValues[1].trim()
-        updateSearchStatus("Searching: $query")
-        val results = try {
-            webSearchClient.search(query, count = 5)
-        } catch (t: Throwable) {
-            updateSearchStatus(null)
-            val msg = "Search failed: ${t.message ?: "unknown error"}"
-            fullResponse.append(msg)
-            updateStreaming(msg)
-            return cancelled
-        }
-
-        val enriched = StringBuilder(WebSearchClient.formatForPrompt(query, results))
-        results.take(2).forEachIndexed { idx, r ->
-            updateSearchStatus("Reading: ${r.title.take(40)}")
-            val page = pageFetcher.fetch(r.url, maxChars = 2000)
-            if (page.isNotBlank()) {
-                enriched.append("\n\n--- Page [${idx + 1}] ${r.title} (${r.url}) ---\n")
-                enriched.append(page)
-            }
-        }
-        updateSearchStatus(null)
-
-        val continuation = chatMessages + listOf(
-            ChatMessage(role = "assistant", content = "<search>$query</search>"),
-            ChatMessage(
-                role = "user",
-                content = "$enriched\n\nUse these to answer my previous question. " +
-                    "Do not call <search> again."
-            )
-        )
-        updateStreaming("")
-        cancelled = try {
-            inferenceManager.generate(
-                systemPrompt = systemPromptText,
-                messages = continuation,
-                // Preamble already applied to the first turn; skip it on the follow-up.
-                config = config.copy(applyDefaultPreamble = false),
-                backendId = backendId
-            ).collect { token ->
-                fullResponse.append(token)
-                updateStreaming(fullResponse.toString())
-            }
-            cancelled
-        } catch (ce: CancellationException) { true }
-        return cancelled
-    }
-
-    private suspend fun runToolLoop(
-        chatMessages: List<ChatMessage>,
-        systemPromptText: String,
-        fullResponse: StringBuilder,
-        backendId: String? = null,
-        config: GenerationConfig = GenerationConfig()
-    ): Boolean {
-        var conversation = chatMessages
-        repeat(TOOL_LOOP_MAX_ROUNDS) { round ->
-            val buf = StringBuilder()
-            // Only apply the preamble on the first round; subsequent rounds are continuations.
-            val roundConfig = if (round == 0) config else config.copy(applyDefaultPreamble = false)
-            val cancelled = try {
-                inferenceManager.generate(
-                    systemPrompt = systemPromptText,
-                    messages = conversation,
-                    config = roundConfig,
-                    backendId = backendId
-                ).collect { token ->
-                    buf.append(token)
-                    updateStreaming(stripToolTags(buf.toString()))
-                }
-                false
-            } catch (ce: CancellationException) { true }
-
-            if (cancelled) {
-                fullResponse.append(stripToolTags(buf.toString()))
-                return true
-            }
-
-            val text = buf.toString()
-            val searchMatch = SEARCH_TAG_REGEX.find(text)
-            val fetchMatch = FETCH_TAG_REGEX.find(text)
-            val firstTool = listOfNotNull(searchMatch, fetchMatch).minByOrNull { it.range.first }
-
-            if (firstTool == null) {
-                fullResponse.append(text)
-                return false
-            }
-
-            val isLastRound = round == TOOL_LOOP_MAX_ROUNDS - 1
-            val toolResultText = when (firstTool) {
-                searchMatch -> {
-                    val query = firstTool.groupValues[1].trim()
-                    updateSearchStatus("Searching: $query")
-                    try {
-                        val results = webSearchClient.search(query)
-                        WebSearchClient.formatForPrompt(query, results)
-                    } catch (t: Throwable) {
-                        "Search failed: ${t.message ?: "unknown error"}"
-                    } finally {
-                        updateSearchStatus(null)
-                    }
-                }
-                fetchMatch -> {
-                    val url = firstTool.groupValues[1].trim()
-                    updateSearchStatus("Reading: ${url.take(50)}")
-                    val page = pageFetcher.fetch(url, maxChars = 3000)
-                    updateSearchStatus(null)
-                    if (page.isBlank()) "Fetch for $url returned no readable content."
-                    else "Page content for $url:\n\n$page"
-                }
-                else -> ""
-            }
-
-            val closingHint = if (isLastRound)
-                "\n\nYou've used the maximum number of tool calls. Answer now without any more tags."
-            else ""
-
-            conversation = conversation + listOf(
-                ChatMessage(role = "assistant", content = firstTool.value),
-                ChatMessage(role = "user", content = toolResultText + closingHint)
-            )
-            updateStreaming("")
-        }
-        return false
-    }
 }
-
