@@ -12,12 +12,11 @@ from __future__ import annotations
 
 from typing import Any
 
-import httpx
 from fastapi import APIRouter, Depends, Query
 from fastapi.responses import JSONResponse
 
 from auth import require_auth
-from config import OLLAMA_URL
+import ollama_client
 
 
 router = APIRouter()
@@ -37,18 +36,6 @@ def _read_meminfo() -> dict[str, int]:
     except OSError:
         pass
     return out
-
-
-async def _ollama_model_info(model: str) -> dict[str, Any] | None:
-    """Pulls /api/show for a given model. Returns None on any failure."""
-    try:
-        async with httpx.AsyncClient(timeout=5) as client:
-            r = await client.post(f"{OLLAMA_URL}/api/show", json={"name": model})
-        if r.status_code != 200:
-            return None
-        return r.json()
-    except Exception:
-        return None
 
 
 def _params_billions(model_info: dict[str, Any]) -> float | None:
@@ -99,7 +86,7 @@ async def server_info(
         "ram_available_gb": round(mem["available_kb"] / (1024 * 1024), 2),
     }
     if model:
-        info = await _ollama_model_info(model)
+        info = await ollama_client.show(model)
         params_b = _params_billions(info) if info else None
         payload["model_params_b"] = params_b
         payload["kv_per_token_kb"] = _kv_per_token_kb(params_b)

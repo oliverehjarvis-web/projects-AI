@@ -6,11 +6,11 @@ import time
 from typing import AsyncIterator
 from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
-import httpx
 from pydantic import BaseModel
 from auth import require_auth
-from config import OLLAMA_URL, DEFAULT_MODEL
+from config import DEFAULT_MODEL
 from db import get_db
+import ollama_client
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -166,39 +166,36 @@ async def _stream_ollama(req: InferenceRequest) -> AsyncIterator[str]:
 
     async def pump() -> None:
         try:
-            async with httpx.AsyncClient(timeout=None) as client:
-                async with client.stream(
-                    "POST", f"{OLLAMA_URL}/api/chat", json=body
-                ) as response:
-                    logger.info(
-                        "ollama connected status=%d after %.1fs",
-                        response.status_code, time.monotonic() - started,
-                    )
-                    if response.status_code != 200:
-                        detail = ""
+            async with ollama_client.chat_stream(body) as response:
+                logger.info(
+                    "ollama connected status=%d after %.1fs",
+                    response.status_code, time.monotonic() - started,
+                )
+                if response.status_code != 200:
+                    detail = ""
+                    try:
+                        raw = await response.aread()
+                        detail = raw.decode("utf-8", errors="replace")[:500]
                         try:
-                            raw = await response.aread()
-                            detail = raw.decode("utf-8", errors="replace")[:500]
-                            try:
-                                detail = json.loads(detail).get("error", detail)
-                            except Exception:
-                                pass
+                            detail = json.loads(detail).get("error", detail)
                         except Exception:
                             pass
-                        msg = (
-                            f"Ollama HTTP {response.status_code}: {detail}"
-                            if detail else f"Ollama HTTP {response.status_code}"
-                        )
-                        logger.warning("ollama non-200: %s", msg)
-                        await queue.put(("error", msg))
-                        return
-                    async for line in response.aiter_lines():
-                        if line:
-                            await queue.put(("line", line))
-                    logger.info(
-                        "ollama stream closed cleanly after %.1fs",
-                        time.monotonic() - started,
+                    except Exception:
+                        pass
+                    msg = (
+                        f"Ollama HTTP {response.status_code}: {detail}"
+                        if detail else f"Ollama HTTP {response.status_code}"
                     )
+                    logger.warning("ollama non-200: %s", msg)
+                    await queue.put(("error", msg))
+                    return
+                async for line in response.aiter_lines():
+                    if line:
+                        await queue.put(("line", line))
+                logger.info(
+                    "ollama stream closed cleanly after %.1fs",
+                    time.monotonic() - started,
+                )
         except asyncio.CancelledError:
             raise
         except Exception as e:

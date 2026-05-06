@@ -1,9 +1,9 @@
 import json
 from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
-import httpx
+
 from auth import require_auth
-from config import OLLAMA_URL
+import ollama_client
 
 router = APIRouter()
 
@@ -38,62 +38,44 @@ CATALOGUE = [
 @router.get("/v1/models")
 async def list_models(_: None = Depends(require_auth)):
     """Returns installed models (from Ollama) and the browseable catalogue."""
+    raw_tags = await ollama_client.tags()
+    reachable = raw_tags is not None
     installed: list[dict] = []
-    try:
-        async with httpx.AsyncClient(timeout=5) as client:
-            r = await client.get(f"{OLLAMA_URL}/api/tags")
-            if r.status_code == 200:
-                installed = [
-                    {"id": m["name"], "size_gb": round(m.get("size", 0) / 1e9, 1)}
-                    for m in r.json().get("models", [])
-                ]
-    except Exception:
-        pass
+    if raw_tags is not None:
+        installed = [
+            {"id": m["name"], "size_gb": round(m.get("size", 0) / 1e9, 1)}
+            for m in raw_tags.get("models", [])
+        ]
 
     installed_ids = {m["id"] for m in installed}
     catalogue = [
         {**m, "installed": m["id"] in installed_ids}
         for m in CATALOGUE
     ]
-    # Also include any locally installed models not in the catalogue
+    # Also include any locally installed models not in the catalogue.
     for m in installed:
         if m["id"] not in {c["id"] for c in CATALOGUE}:
             catalogue.append({**m, "family": "Other", "label": m["id"],
                               "notes": "Locally installed", "installed": True})
 
-    return {"installed": installed, "catalogue": catalogue}
+    return {"installed": installed, "catalogue": catalogue, "ollama_reachable": reachable}
 
 
 @router.delete("/v1/models/{model_name:path}")
 async def delete_model(model_name: str, _: None = Depends(require_auth)):
-    async with httpx.AsyncClient(timeout=30) as client:
-        r = await client.delete(f"{OLLAMA_URL}/api/delete", json={"name": model_name})
-    return {"ok": r.status_code in (200, 404)}
+    return {"ok": await ollama_client.delete(model_name)}
 
 
 async def _pull_stream(model_name: str):
-    try:
-        async with httpx.AsyncClient(timeout=None) as client:
-            async with client.stream("POST", f"{OLLAMA_URL}/api/pull",
-                                     json={"name": model_name}) as r:
-                async for line in r.aiter_lines():
-                    if not line:
-                        continue
-                    try:
-                        data = json.loads(line)
-                    except json.JSONDecodeError:
-                        continue
-                    if "error" in data:
-                        yield f"data: {json.dumps({'status': 'error', 'error': data['error'], 'progress': None})}\n\n"
-                        return
-                    status = data.get("status", "")
-                    total = data.get("total", 0)
-                    completed = data.get("completed", 0)
-                    progress = round(completed / total * 100) if total else None
-                    yield f"data: {json.dumps({'status': status, 'progress': progress})}\n\n"
-    except Exception as exc:
-        yield f"data: {json.dumps({'status': 'error', 'error': str(exc), 'progress': None})}\n\n"
-        return
+    async for event in ollama_client.pull(model_name):
+        if "error" in event:
+            yield f"data: {json.dumps({'status': 'error', 'error': event['error'], 'progress': None})}\n\n"
+            return
+        status = event.get("status", "")
+        total = event.get("total", 0)
+        completed = event.get("completed", 0)
+        progress = round(completed / total * 100) if total else None
+        yield f"data: {json.dumps({'status': status, 'progress': progress})}\n\n"
     yield "data: {\"status\": \"done\", \"progress\": 100}\n\n"
 
 
