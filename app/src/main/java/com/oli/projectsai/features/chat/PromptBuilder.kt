@@ -27,14 +27,33 @@ internal object PromptBuilder {
         manualContext: String,
         memory: String,
         memoryTokenLimit: Int,
-    ): String = buildList {
-        val globalBlock = buildGlobalBlock(name, rules)
-        if (globalBlock.isNotBlank()) add(globalBlock)
-        if (manualContext.isNotBlank()) add("<project_context>\n$manualContext\n</project_context>")
-        if (memory.isNotBlank()) {
-            add("<memory>\n${trimMemoryToLimit(memory, memoryTokenLimit)}\n</memory>")
+    ): String {
+        val blocks = buildList {
+            val globalBlock = buildGlobalBlock(name, rules)
+            if (globalBlock.isNotBlank()) add(globalBlock)
+            if (manualContext.isNotBlank()) add("<project_context>\n$manualContext\n</project_context>")
+            if (memory.isNotBlank()) {
+                add("<memory>\n${trimMemoryToLimit(memory, memoryTokenLimit)}\n</memory>")
+            }
         }
-    }.joinToString("\n\n")
+        if (blocks.isEmpty()) return ""
+        // Wrap the standing material in an outer block with an explicit "do not deliberate"
+        // header. Thinking-capable remote models (DeepSeek-R1, Magistral, Qwen-thinking, …)
+        // otherwise enumerate every rule inside <think>, evaluate each against each draft
+        // reply, and stall for minutes — even on trivial questions. The header reframes the
+        // blocks as reference material rather than a checklist to reason over.
+        return buildString {
+            append("<standing_instructions>\n")
+            append(
+                "The sections below describe the user, the project, and accumulated memory. " +
+                    "Apply them when relevant to the user's request. Do not enumerate, restate, " +
+                    "or deliberate on them inside <think> — they are reference material, not a " +
+                    "checklist to evaluate against each draft.\n\n",
+            )
+            append(blocks.joinToString("\n\n"))
+            append("\n</standing_instructions>")
+        }
+    }
 
     /**
      * User profile / standing rules block. Framed as soft preferences, not hard rules, and
