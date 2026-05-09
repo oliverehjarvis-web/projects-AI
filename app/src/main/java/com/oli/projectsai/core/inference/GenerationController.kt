@@ -120,7 +120,6 @@ class GenerationController @Inject constructor(
                 add(currentTemporalContext())
                 if (params.systemPrompt.isNotBlank()) add(params.systemPrompt)
                 if (toolInstructions.isNotBlank()) add(toolInstructions)
-                if (params.forceShortAnswer) add(FORCE_ANSWER_INSTRUCTIONS)
             }.joinToString("\n\n")
 
             val genConfig = GenerationConfig(

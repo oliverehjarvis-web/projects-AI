@@ -410,31 +410,6 @@ fun ChatScreen(
                 }
             }
 
-            // "Answer now" — appears mid-generation so the user can break a thinking model out
-            // of a long <think> deliberation. Cancels the current run, drops the partial, and
-            // restarts the same turn with FORCE_ANSWER_INSTRUCTIONS in the system prompt.
-            if (isGenerating) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 12.dp, vertical = 4.dp),
-                    horizontalArrangement = Arrangement.End
-                ) {
-                    FilledTonalButton(
-                        onClick = { viewModel.forceAnswer() },
-                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp)
-                    ) {
-                        Icon(
-                            Icons.Default.FastForward,
-                            contentDescription = null,
-                            modifier = Modifier.size(16.dp)
-                        )
-                        Spacer(Modifier.width(4.dp))
-                        Text("Answer now", style = MaterialTheme.typography.labelMedium)
-                    }
-                }
-            }
-
             // Pending attachments strip
             if (pendingAttachments.isNotEmpty()) {
                 Surface(tonalElevation = 2.dp) {
