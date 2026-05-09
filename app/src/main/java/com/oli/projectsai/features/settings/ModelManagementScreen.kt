@@ -190,15 +190,39 @@ fun ModelManagementScreen(
             } else {
                 modelFiles.forEach { file ->
                     val isLoadedFile = (modelState as? ModelState.Loaded)?.modelInfo?.filePath == file.path
+                    val isLoadingThis = (modelState as? ModelState.Loading)?.modelInfo?.filePath == file.path
                     ListItem(
                         headlineContent = { Text(file.name) },
                         supportingContent = { Text(file.path) },
                         trailingContent = {
                             Row(verticalAlignment = Alignment.CenterVertically) {
-                                Button(
-                                    onClick = { viewModel.loadModel(file.path, file.name, ModelPrecision.Q4) },
-                                    enabled = modelState !is ModelState.Loading
-                                ) { Text("Load") }
+                                when {
+                                    isLoadedFile -> AssistChip(
+                                        onClick = {},
+                                        label = { Text("Loaded") },
+                                        leadingIcon = {
+                                            Icon(
+                                                Icons.Default.CheckCircle,
+                                                null,
+                                                modifier = Modifier.size(16.dp),
+                                            )
+                                        },
+                                    )
+                                    isLoadingThis -> AssistChip(
+                                        onClick = {},
+                                        label = { Text("Loading…") },
+                                        leadingIcon = {
+                                            CircularProgressIndicator(
+                                                modifier = Modifier.size(14.dp),
+                                                strokeWidth = 2.dp,
+                                            )
+                                        },
+                                    )
+                                    else -> Button(
+                                        onClick = { viewModel.loadModel(file.path, file.name, ModelPrecision.Q4) },
+                                        enabled = modelState !is ModelState.Loading
+                                    ) { Text("Load") }
+                                }
                                 Box {
                                     IconButton(onClick = { openMenuFile = file }) {
                                         Icon(Icons.Default.MoreVert, contentDescription = "More")

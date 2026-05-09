@@ -30,6 +30,7 @@ fun HomeScreen(
     onSettingsClick: () -> Unit,
     onTranscribeClick: () -> Unit,
     onLinkedInClick: () -> Unit,
+    onModelStatusClick: () -> Unit,
     viewModel: HomeViewModel = hiltViewModel()
 ) {
     val projects by viewModel.projects.collectAsStateWithLifecycle()
@@ -50,7 +51,7 @@ fun HomeScreen(
                     )
                 },
                 actions = {
-                    ModelStatusChip(modelState)
+                    ModelStatusChip(modelState, onClick = onModelStatusClick)
                     IconButton(onClick = onLinkedInClick) {
                         Icon(Icons.Default.Group, contentDescription = "LinkedIn")
                     }
@@ -195,9 +196,9 @@ private fun ProjectCard(
 }
 
 @Composable
-private fun ModelStatusChip(modelState: ModelState) {
+private fun ModelStatusChip(modelState: ModelState, onClick: () -> Unit) {
     val (label, color) = when (modelState) {
-        is ModelState.Unloaded -> "No model" to MaterialTheme.colorScheme.onSurfaceVariant
+        is ModelState.Unloaded -> "Load model" to MaterialTheme.colorScheme.primary
         is ModelState.Loading -> "Loading…" to MaterialTheme.colorScheme.tertiary
         // Compact label so the TopAppBar title doesn't get ellipsised on narrow phones —
         // "Q4 (4-bit quantised)" was eating the whole title slot.
@@ -205,7 +206,7 @@ private fun ModelStatusChip(modelState: ModelState) {
         is ModelState.Error -> "Error" to MaterialTheme.colorScheme.error
     }
     AssistChip(
-        onClick = { },
+        onClick = onClick,
         label = { Text(label, style = MaterialTheme.typography.labelSmall) },
         modifier = Modifier.padding(end = 4.dp),
         colors = AssistChipDefaults.assistChipColors(labelColor = color)

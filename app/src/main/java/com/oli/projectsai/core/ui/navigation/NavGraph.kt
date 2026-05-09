@@ -60,7 +60,8 @@ fun ProjectsAINavGraph(navController: NavHostController) {
                 onNewChat = { projectId -> navController.navigate(Routes.newChat(projectId)) },
                 onSettingsClick = { navController.navigate(Routes.SETTINGS) },
                 onTranscribeClick = { navController.navigate(Routes.TRANSCRIPTION) },
-                onLinkedInClick = { navController.navigate(Routes.LINKEDIN) }
+                onLinkedInClick = { navController.navigate(Routes.LINKEDIN) },
+                onModelStatusClick = { navController.navigate(Routes.MODEL_MANAGEMENT) },
             )
         }
 

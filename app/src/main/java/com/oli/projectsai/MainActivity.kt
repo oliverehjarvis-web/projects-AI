@@ -18,6 +18,7 @@ import androidx.lifecycle.repeatOnLifecycle
 import androidx.navigation.compose.rememberNavController
 import com.oli.projectsai.features.sync.SyncRepository
 import com.oli.projectsai.core.inference.EXTRA_OPEN_CHAT_ID
+import com.oli.projectsai.core.inference.ModelAutoLoader
 import com.oli.projectsai.core.ui.navigation.ProjectsAINavGraph
 import com.oli.projectsai.core.ui.navigation.Routes
 import com.oli.projectsai.core.ui.theme.ProjectsAITheme
@@ -31,6 +32,7 @@ import kotlinx.coroutines.launch
 class MainActivity : ComponentActivity() {
 
     @Inject lateinit var syncRepository: SyncRepository
+    @Inject lateinit var modelAutoLoader: ModelAutoLoader
 
     private val pendingChatId = MutableStateFlow<Long?>(null)
 
@@ -38,6 +40,10 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         consumeChatIdExtra(intent)
+        // Warm the on-device engine with whatever model the user loaded last. Idempotent —
+        // skipped after the first call this process. Runs on a background scope; the UI keeps
+        // working while LiteRT-LM finishes initialising and the status chip flips to Loaded.
+        modelAutoLoader.ensureLoaded()
         // Foreground poll: sync every 60s while the activity is at least STARTED.
         // repeatOnLifecycle auto-cancels the loop when backgrounded and restarts
         // on return, so we never burn battery or data when the app isn't visible.

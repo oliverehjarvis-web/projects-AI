@@ -9,11 +9,13 @@ import com.oli.projectsai.core.inference.InferenceManager
 import com.oli.projectsai.core.inference.ModelInfo
 import com.oli.projectsai.core.inference.ModelPrecision
 import com.oli.projectsai.core.inference.ModelState
+import com.oli.projectsai.core.preferences.ModelSettings
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import java.io.File
@@ -39,7 +41,8 @@ sealed class DownloadState {
 @HiltViewModel
 class ModelManagementViewModel @Inject constructor(
     @ApplicationContext private val context: Context,
-    private val inferenceManager: InferenceManager
+    private val inferenceManager: InferenceManager,
+    private val modelSettings: ModelSettings,
 ) : ViewModel() {
 
     companion object {
@@ -254,6 +257,8 @@ class ModelManagementViewModel @Inject constructor(
                         filePath = path
                     )
                 )
+                // Remember it so [ModelAutoLoader] can warm the engine on the next cold start.
+                modelSettings.setLastModel(path, name, precision.name)
             } catch (e: Exception) {
                 _loadError.value = friendlyLoadError(e)
             }
@@ -291,6 +296,9 @@ class ModelManagementViewModel @Inject constructor(
     fun unloadModel() {
         viewModelScope.launch {
             inferenceManager.unloadModel()
+            // Forget the auto-load target — if the user explicitly unloaded, they don't want
+            // the next cold start to silently bring it back.
+            modelSettings.clear()
         }
     }
 
@@ -315,6 +323,10 @@ class ModelManagementViewModel @Inject constructor(
                 }
                 _downloadStates.update { it - file.name }
                 scanModelFiles()
+                // If we were going to auto-load this file next session, drop the pointer.
+                if (modelSettings.lastModelPath.first() == path) {
+                    modelSettings.clear()
+                }
                 _loadError.value = null
             } catch (e: Exception) {
                 _loadError.value = "Delete failed: ${e.message}"
