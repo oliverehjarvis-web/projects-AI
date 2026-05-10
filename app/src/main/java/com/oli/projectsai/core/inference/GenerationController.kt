@@ -154,6 +154,12 @@ class GenerationController @Inject constructor(
                         ChatError("Load a model to start generating.", retryable = false)
                     is InferenceError.Cancelled ->
                         ChatError("Generation cancelled.", retryable = true)
+                    is InferenceError.ThinkingBudgetExceeded ->
+                        ChatError(
+                            "The model spent too long deliberating and was stopped. " +
+                                "Try simplifying the prompt or switching to a non-thinking model.",
+                            retryable = true,
+                        )
                     is InferenceError.GenerationFailed,
                     is InferenceError.TranscriptionFailed,
                     is InferenceError.LoadFailed ->
@@ -199,6 +205,7 @@ class GenerationController @Inject constructor(
     ): Boolean {
         var firstTokenReceived = false
         var showingSlowWarning = false
+        val tracker = ThinkBudgetTracker()
         val slowJob = scope.launch {
             delay(SLOW_RESPONSE_THRESHOLD_MS)
             showingSlowWarning = true
@@ -218,6 +225,12 @@ class GenerationController @Inject constructor(
                 if (showingSlowWarning) {
                     showingSlowWarning = false
                     updateSearchStatus(null)
+                }
+                if (tracker.observe(token)) {
+                    // Drop the half-finished thinking text — saving it would just persist an
+                    // unfinished <think> block as the assistant's reply.
+                    fullResponse.clear()
+                    throw InferenceError.ThinkingBudgetExceeded
                 }
                 fullResponse.append(token)
                 updateStreaming(fullResponse.toString())

@@ -42,6 +42,7 @@ class AgentRunner @Inject constructor(
         onSearchStatus: (String?) -> Unit,
     ): Boolean {
         val firstBuf = StringBuilder()
+        val firstTracker = ThinkBudgetTracker()
         var cancelled = try {
             inferenceManager.generate(
                 systemPrompt = systemPromptText,
@@ -49,6 +50,10 @@ class AgentRunner @Inject constructor(
                 config = config,
                 backendId = backendId,
             ).collect { token ->
+                if (firstTracker.observe(token)) {
+                    fullResponse.clear()
+                    throw InferenceError.ThinkingBudgetExceeded
+                }
                 firstBuf.append(token)
                 onStreaming(stripToolTags(firstBuf.toString()))
             }
@@ -93,6 +98,7 @@ class AgentRunner @Inject constructor(
             ),
         )
         onStreaming("")
+        val followTracker = ThinkBudgetTracker()
         cancelled = try {
             inferenceManager.generate(
                 systemPrompt = systemPromptText,
@@ -101,6 +107,10 @@ class AgentRunner @Inject constructor(
                 config = config.copy(applyDefaultPreamble = false),
                 backendId = backendId,
             ).collect { token ->
+                if (followTracker.observe(token)) {
+                    fullResponse.clear()
+                    throw InferenceError.ThinkingBudgetExceeded
+                }
                 fullResponse.append(token)
                 onStreaming(fullResponse.toString())
             }
@@ -121,6 +131,7 @@ class AgentRunner @Inject constructor(
         var conversation = chatMessages
         repeat(TOOL_LOOP_MAX_ROUNDS) { round ->
             val buf = StringBuilder()
+            val tracker = ThinkBudgetTracker()
             // Only apply the preamble on the first round; subsequent rounds are continuations.
             val roundConfig = if (round == 0) config else config.copy(applyDefaultPreamble = false)
             val cancelled = try {
@@ -130,6 +141,10 @@ class AgentRunner @Inject constructor(
                     config = roundConfig,
                     backendId = backendId,
                 ).collect { token ->
+                    if (tracker.observe(token)) {
+                        fullResponse.clear()
+                        throw InferenceError.ThinkingBudgetExceeded
+                    }
                     buf.append(token)
                     onStreaming(stripToolTags(buf.toString()))
                 }

@@ -56,6 +56,9 @@ const val TRANSCRIPTION_MAX_SECONDS = 30
 sealed class InferenceError(message: String, cause: Throwable? = null) : Exception(message, cause) {
     data object ModelNotLoaded : InferenceError("No model is loaded.")
     data object Cancelled : InferenceError("Generation cancelled.")
+    data object ThinkingBudgetExceeded : InferenceError(
+        "Model spent too long inside <think> — generation aborted."
+    )
     class GenerationFailed(cause: Throwable) : InferenceError(
         cause.message ?: "Generation failed",
         cause

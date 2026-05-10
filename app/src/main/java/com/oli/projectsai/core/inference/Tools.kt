@@ -22,6 +22,55 @@ internal val FETCH_TAG_REGEX = Regex("<fetch>(.*?)</fetch>", RegexOption.DOT_MAT
 internal const val TOOL_LOOP_MAX_ROUNDS = 4
 internal const val SLOW_RESPONSE_THRESHOLD_MS = 30_000L
 
+/**
+ * Hard ceiling on characters streamed inside a `<think>...</think>` block before we abort.
+ * ~6 kB ≈ 1500 SentencePiece tokens, enough for legitimate multi-step deliberation but well
+ * short of the loops we see thinking-capable models fall into when they keep re-checking the
+ * standing instructions. Aborting beats letting the user wait minutes for nothing.
+ */
+internal const val THINK_BUDGET_CHARS = 6000
+
+/**
+ * Streaming detector that watches tokens emitted by the model, tracks cumulative characters
+ * that fall inside `<think>...</think>` blocks, and signals when the per-turn budget has been
+ * exceeded. Robust to tags that split across token boundaries — the trailing buffer keeps a
+ * few characters around so a `<thi` + `nk>` split is still recognised.
+ *
+ * Stateful, single-use (one instance per generation). Not thread-safe.
+ */
+internal class ThinkBudgetTracker(private val maxChars: Int = THINK_BUDGET_CHARS) {
+    private var inThink = false
+    private var thinkChars = 0
+    private val tail = StringBuilder()
+
+    /** Returns true once cumulative thinking content has exceeded the budget. */
+    fun observe(token: String): Boolean {
+        for (ch in token) {
+            tail.append(ch)
+            if (!inThink) {
+                if (tail.endsWith("<think>")) {
+                    inThink = true
+                    thinkChars = 0
+                    tail.clear()
+                } else if (tail.length > 7) {
+                    tail.delete(0, tail.length - 7)
+                }
+            } else {
+                thinkChars++
+                if (tail.endsWith("</think>")) {
+                    inThink = false
+                    tail.clear()
+                } else if (thinkChars > maxChars) {
+                    return true
+                } else if (tail.length > 8) {
+                    tail.delete(0, tail.length - 8)
+                }
+            }
+        }
+        return false
+    }
+}
+
 internal fun MessageRole.toWireRole(): String = when (this) {
     MessageRole.USER -> "user"
     MessageRole.ASSISTANT -> "assistant"
