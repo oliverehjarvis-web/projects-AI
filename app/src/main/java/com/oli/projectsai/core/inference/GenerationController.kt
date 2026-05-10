@@ -53,6 +53,13 @@ class GenerationController @Inject constructor(
     private val _activeGeneration = MutableStateFlow<ActiveGeneration?>(null)
     val activeGeneration: StateFlow<ActiveGeneration?> = _activeGeneration.asStateFlow()
 
+    init {
+        // Let the InferenceManager refuse model swaps while we're streaming — see
+        // InferenceError.ModelBusy. Fine to bind unconditionally because both classes are
+        // @Singleton so this happens exactly once on graph construction.
+        inferenceManager.bindGenerationActiveCheck { _activeGeneration.value != null }
+    }
+
     private val _errors = MutableStateFlow<Map<Long, ChatError>>(emptyMap())
     val errors: StateFlow<Map<Long, ChatError>> = _errors.asStateFlow()
 
@@ -62,14 +69,24 @@ class GenerationController @Inject constructor(
     private var job: Job? = null
 
     fun start(params: GenerationParams): Boolean {
-        if (_activeGeneration.value != null) return false
-        _activeGeneration.value = ActiveGeneration(
-            chatId = params.chatId,
-            streamingContent = "",
-            isGenerating = true,
-            searchStatus = null,
-            titleHint = params.chatTitleHint,
-        )
+        // Atomic check-and-set so a fast double-tap (or a double event from recomposition)
+        // can't race past the empty-state guard and launch two parallel generations against
+        // the same chat. Without this, both jobs would write to `_activeGeneration` and the
+        // streamingContent in the UI would interleave tokens from both.
+        val claimed = synchronized(this) {
+            if (_activeGeneration.value != null) false
+            else {
+                _activeGeneration.value = ActiveGeneration(
+                    chatId = params.chatId,
+                    streamingContent = "",
+                    isGenerating = true,
+                    searchStatus = null,
+                    titleHint = params.chatTitleHint,
+                )
+                true
+            }
+        }
+        if (!claimed) return false
         clearError(params.chatId)
         job = scope.launch { runGeneration(params) }
         return true
@@ -160,6 +177,11 @@ class GenerationController @Inject constructor(
                                 "Try simplifying the prompt or switching to a non-thinking model.",
                             retryable = true,
                         )
+                    is InferenceError.ModelBusy ->
+                        // Generation paths shouldn't ever surface ModelBusy — that error is
+                        // raised from the loadModel side, which lives outside this controller.
+                        // Map defensively to a retryable error if it ever does bubble through.
+                        ChatError(ie.message ?: "Model busy.", retryable = true)
                     is InferenceError.GenerationFailed,
                     is InferenceError.TranscriptionFailed,
                     is InferenceError.LoadFailed ->

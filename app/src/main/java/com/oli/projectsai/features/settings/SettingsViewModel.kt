@@ -8,6 +8,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.oli.projectsai.BuildConfig
 import com.oli.projectsai.features.repo.github.GitHubClient
+import com.oli.projectsai.core.preferences.AssistantSettings
 import com.oli.projectsai.core.preferences.GitHubSettings
 import com.oli.projectsai.core.preferences.RemoteSettings
 import com.oli.projectsai.core.preferences.SearchDepth
@@ -73,7 +74,8 @@ class SettingsViewModel @Inject constructor(
     private val githubSettings: GitHubSettings,
     private val githubClient: GitHubClient,
     private val syncRepository: SyncRepository,
-    private val httpClient: HttpClient
+    private val httpClient: HttpClient,
+    private val assistantSettings: AssistantSettings,
 ) : ViewModel() {
 
     companion object {
@@ -96,6 +98,13 @@ class SettingsViewModel @Inject constructor(
 
     fun setSearchDepth(value: SearchDepth) {
         viewModelScope.launch { searchSettings.setSearchDepth(value) }
+    }
+
+    val showReasoningByDefault: StateFlow<Boolean> = assistantSettings.showReasoningByDefault
+        .stateIn(viewModelScope, SharingStarted.Eagerly, false)
+
+    fun setShowReasoningByDefault(value: Boolean) {
+        viewModelScope.launch { assistantSettings.setShowReasoningByDefault(value) }
     }
 
     val serverUrl: StateFlow<String> = remoteSettings.serverUrl.stateIn(

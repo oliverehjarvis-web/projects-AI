@@ -7,6 +7,9 @@ import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
@@ -20,9 +23,10 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
@@ -36,7 +40,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.ImeAction
@@ -73,6 +79,8 @@ fun ChatScreen(
     val webSearchEnabled by viewModel.webSearchEnabled.collectAsStateWithLifecycle()
     val searchStatus by viewModel.searchStatus.collectAsStateWithLifecycle()
     val toggleWarning by viewModel.toggleWarning.collectAsStateWithLifecycle()
+    val showReasoningByDefault by viewModel.showReasoningByDefault.collectAsStateWithLifecycle()
+    val targetMessageId by viewModel.targetMessageId.collectAsStateWithLifecycle()
 
     val systemContext by viewModel.systemContext.collectAsStateWithLifecycle()
     val stagedRepoFiles by viewModel.stagedRepoFiles.collectAsStateWithLifecycle()
@@ -81,7 +89,7 @@ fun ChatScreen(
     var showTokenDetail by remember { mutableStateOf(false) }
     var showMemoryDialog by remember { mutableStateOf(false) }
     var showContextDialog by remember { mutableStateOf(false) }
-    val listState = rememberLazyListState()
+    val listState = rememberSaveable(saver = LazyListState.Saver) { LazyListState() }
     val context = LocalContext.current
     val snackbarHostState = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
@@ -145,11 +153,34 @@ fun ChatScreen(
             }
         }
     }
+    // Suppress the auto-scroll-to-bottom for the first messages load that follows a
+    // search-result deeplink — the deeplink wants the viewport on the matched message, not
+    // the latest one.
+    val pendingTarget = targetMessageId
     LaunchedEffect(messages.size, streamingContent) {
+        if (pendingTarget != null) return@LaunchedEffect
         if (isNearBottom && (messages.isNotEmpty() || streamingContent.isNotBlank())) {
             listState.animateScrollToItem(
                 (messages.size + if (streamingContent.isNotBlank()) 1 else 0).coerceAtLeast(0)
             )
+        }
+    }
+    // After a deeplink jump, hold the matched id for ~1.5 s so we can pulse the bubble's
+    // border. Cleared by the LaunchedEffect once the highlight fades.
+    var highlightedMessageId by remember { mutableStateOf<Long?>(null) }
+    LaunchedEffect(messages, pendingTarget) {
+        val target = pendingTarget ?: return@LaunchedEffect
+        val idx = messages.indexOfFirst { it.id == target }
+        if (idx >= 0) {
+            listState.animateScrollToItem(idx)
+            highlightedMessageId = target
+            viewModel.consumeTargetMessageId()
+        }
+    }
+    LaunchedEffect(highlightedMessageId) {
+        if (highlightedMessageId != null) {
+            kotlinx.coroutines.delay(1500)
+            highlightedMessageId = null
         }
     }
 
@@ -317,6 +348,8 @@ fun ChatScreen(
                         MessageBubble(
                             message = message,
                             canRegenerate = isLastAssistant && !isGenerating,
+                            highlighted = highlightedMessageId == message.id,
+                            showReasoningByDefault = showReasoningByDefault,
                             onCopy = {
                                 viewModel.copyToClipboard(message.content)
                                 showCopyToast("Copied message")
@@ -335,6 +368,7 @@ fun ChatScreen(
                         item {
                             StreamingBubble(
                                 content = streamingContent,
+                                showReasoningByDefault = showReasoningByDefault,
                                 onCopyCode = { code ->
                                     viewModel.copyToClipboard(code)
                                     showCopyToast("Copied code")
@@ -550,17 +584,56 @@ private fun ThinkingIndicator() {
         }
     }
     val label = when {
-        elapsedSec < 5 -> "Thinking…"
-        elapsedSec < 20 -> "Processing prompt… ${elapsedSec}s"
-        else -> "Still working… ${elapsedSec}s (large prompts can take a few minutes on CPU)"
+        elapsedSec < 5 -> "Thinking"
+        elapsedSec < 30 -> "Processing prompt · ${elapsedSec}s"
+        else -> "Still working · ${elapsedSec}s — large prompts take longer on CPU"
     }
     Row(
         modifier = Modifier.padding(16.dp),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+        ThinkingDots()
         Text(label, style = MaterialTheme.typography.bodySmall)
+    }
+}
+
+@Composable
+private fun ThinkingDots() {
+    val transition = rememberInfiniteTransition(label = "thinking-dots")
+    val color = MaterialTheme.colorScheme.primary
+    // Three dots that pulse in a wave: each lifts and brightens then settles, offset by 150 ms.
+    Row(
+        modifier = Modifier.height(16.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(4.dp)
+    ) {
+        listOf(0, 150, 300).forEach { delayMs ->
+            val scale by transition.animateFloat(
+                initialValue = 0.7f,
+                targetValue = 1f,
+                animationSpec = infiniteRepeatable(
+                    animation = tween(900, delayMillis = delayMs, easing = FastOutSlowInEasing),
+                    repeatMode = RepeatMode.Reverse,
+                ),
+                label = "scale-$delayMs",
+            )
+            val alpha by transition.animateFloat(
+                initialValue = 0.35f,
+                targetValue = 1f,
+                animationSpec = infiniteRepeatable(
+                    animation = tween(900, delayMillis = delayMs, easing = FastOutSlowInEasing),
+                    repeatMode = RepeatMode.Reverse,
+                ),
+                label = "alpha-$delayMs",
+            )
+            Canvas(modifier = Modifier.size(8.dp)) {
+                drawCircle(
+                    color = color.copy(alpha = alpha),
+                    radius = (size.minDimension / 2f) * scale,
+                )
+            }
+        }
     }
 }
 
@@ -794,12 +867,21 @@ private fun rememberImageBitmap(path: String, maxDim: Int): ImageBitmap? {
 private fun MessageBubble(
     message: Message,
     canRegenerate: Boolean,
+    highlighted: Boolean,
+    showReasoningByDefault: Boolean,
     onCopy: () -> Unit,
     onShare: () -> Unit,
     onCopyCode: (String) -> Unit,
     onRegenerate: () -> Unit
 ) {
     val isUser = message.role == MessageRole.USER
+    // Brief tonal pulse on the matched search hit so the user sees where they landed.
+    val highlightAlpha by animateFloatAsState(
+        targetValue = if (highlighted) 1f else 0f,
+        animationSpec = tween(durationMillis = 600, easing = FastOutSlowInEasing),
+        label = "search-highlight",
+    )
+    val borderColor = MaterialTheme.colorScheme.primary.copy(alpha = highlightAlpha)
     Column(
         modifier = Modifier.fillMaxWidth(),
         horizontalAlignment = if (isUser) Alignment.End else Alignment.Start
@@ -811,6 +893,9 @@ private fun MessageBubble(
                 else
                     MaterialTheme.colorScheme.surfaceVariant
             ),
+            border = if (highlightAlpha > 0f)
+                androidx.compose.foundation.BorderStroke(2.dp, borderColor)
+            else null,
             modifier = Modifier.fillMaxWidth(0.85f)
         ) {
             Column(modifier = Modifier.padding(12.dp)) {
@@ -837,6 +922,7 @@ private fun MessageBubble(
                         ThinkAwareMarkdown(
                             content = message.content,
                             isStreaming = false,
+                            showReasoningByDefault = showReasoningByDefault,
                             onCopyCode = onCopyCode
                         )
                     }
@@ -867,9 +953,38 @@ private fun MessageBubble(
 }
 
 @Composable
-private fun StreamingBubble(content: String, onCopyCode: (String) -> Unit) {
+private fun StreamingBubble(
+    content: String,
+    showReasoningByDefault: Boolean,
+    onCopyCode: (String) -> Unit
+) {
+    // Run the arrival animation once on first composition. Subsequent token updates re-enter
+    // this composable but `Animatable.animateTo` only fires on the first launch since `Unit`
+    // is the key — keeping later tokens silent.
+    val alpha = remember { Animatable(0f) }
+    val scale = remember { Animatable(0.96f) }
+    val offsetY = remember { Animatable(8f) }
+    LaunchedEffect(Unit) {
+        launch {
+            alpha.animateTo(1f, tween(240, easing = FastOutSlowInEasing))
+        }
+        launch {
+            scale.animateTo(1f, tween(240, easing = FastOutSlowInEasing))
+        }
+        launch {
+            offsetY.animateTo(0f, tween(240, easing = FastOutSlowInEasing))
+        }
+    }
     Column(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .graphicsLayer {
+                this.alpha = alpha.value
+                this.scaleX = scale.value
+                this.scaleY = scale.value
+                this.translationY = offsetY.value * density
+                this.transformOrigin = TransformOrigin(0f, 0.5f)
+            },
         horizontalAlignment = Alignment.Start
     ) {
         Card(
@@ -879,7 +994,12 @@ private fun StreamingBubble(content: String, onCopyCode: (String) -> Unit) {
             modifier = Modifier.fillMaxWidth(0.85f)
         ) {
             Column(modifier = Modifier.padding(12.dp)) {
-                ThinkAwareMarkdown(content = content, isStreaming = true, onCopyCode = onCopyCode)
+                ThinkAwareMarkdown(
+                    content = content,
+                    isStreaming = true,
+                    showReasoningByDefault = showReasoningByDefault,
+                    onCopyCode = onCopyCode
+                )
             }
         }
     }
@@ -888,13 +1008,15 @@ private fun StreamingBubble(content: String, onCopyCode: (String) -> Unit) {
 /**
  * Renders assistant content, splitting any `<think>…</think>` blocks into
  * collapsible cards so the chain-of-thought doesn't crowd the main answer.
- * While streaming, the last think block stays expanded so the user sees the
- * model work; once the message is finalised, thinking collapses by default.
+ * While streaming, the still-open think block stays expanded so the user sees the
+ * model work in real time; once the message is finalised, the user setting
+ * [showReasoningByDefault] decides the default expansion state.
  */
 @Composable
 private fun ThinkAwareMarkdown(
     content: String,
     isStreaming: Boolean,
+    showReasoningByDefault: Boolean,
     onCopyCode: (String) -> Unit
 ) {
     val segments = remember(content) { parseThinkSegments(content) }
@@ -902,10 +1024,11 @@ private fun ThinkAwareMarkdown(
         segments.forEachIndexed { index, seg ->
             if (seg.isThinking) {
                 val isLast = index == segments.lastIndex
+                val streamingTail = isStreaming && isLast && !seg.closed
                 ThinkingBlock(
                     text = seg.text,
-                    // While streaming, keep the currently-growing think block open.
-                    initiallyExpanded = isStreaming && isLast && !seg.closed
+                    closed = seg.closed,
+                    initiallyExpanded = streamingTail || (seg.closed && showReasoningByDefault),
                 )
             } else if (seg.text.isNotBlank()) {
                 MarkdownContent(content = seg.text, onCopyCode = onCopyCode)
@@ -915,8 +1038,16 @@ private fun ThinkAwareMarkdown(
 }
 
 @Composable
-private fun ThinkingBlock(text: String, initiallyExpanded: Boolean) {
+private fun ThinkingBlock(text: String, closed: Boolean, initiallyExpanded: Boolean) {
     var expanded by remember { mutableStateOf(initiallyExpanded) }
+    // Cheap token estimate using the same ~4 chars/token approximation used elsewhere in the
+    // app. Surfacing the count in the chip header gives the user a sense of how much work the
+    // model spent reasoning before they decide to expand it.
+    val tokenEstimate = remember(text) { (text.length / 4).coerceAtLeast(1) }
+    val chipLabel = when {
+        !closed -> "Reasoning · live"
+        else -> "Reasoning · ~$tokenEstimate tokens"
+    }
     Card(
         colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.surface
@@ -924,7 +1055,11 @@ private fun ThinkingBlock(text: String, initiallyExpanded: Boolean) {
         border = androidx.compose.foundation.BorderStroke(
             1.dp, MaterialTheme.colorScheme.outlineVariant
         ),
-        modifier = Modifier.fillMaxWidth()
+        modifier = Modifier
+            .fillMaxWidth()
+            .animateContentSize(
+                animationSpec = tween(200, easing = FastOutSlowInEasing)
+            )
     ) {
         Column {
             Row(
@@ -939,10 +1074,10 @@ private fun ThinkingBlock(text: String, initiallyExpanded: Boolean) {
                     Icons.Default.Psychology,
                     contentDescription = null,
                     modifier = Modifier.size(16.dp),
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                    tint = MaterialTheme.colorScheme.primary
                 )
                 Text(
-                    text = if (expanded) "Hide thinking" else "Show thinking",
+                    text = chipLabel,
                     style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.weight(1f)
@@ -955,11 +1090,15 @@ private fun ThinkingBlock(text: String, initiallyExpanded: Boolean) {
             }
             if (expanded) {
                 Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
-                    Text(
-                        text = text.trim(),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
+                    SelectionContainer {
+                        Text(
+                            text = text.trim(),
+                            style = MaterialTheme.typography.bodySmall.copy(
+                                fontStyle = androidx.compose.ui.text.font.FontStyle.Italic
+                            ),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
                 }
             }
         }

@@ -5,6 +5,7 @@ import android.content.Context
 import android.net.Uri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.oli.projectsai.core.inference.InferenceError
 import com.oli.projectsai.core.inference.InferenceManager
 import com.oli.projectsai.core.inference.ModelInfo
 import com.oli.projectsai.core.inference.ModelPrecision
@@ -259,6 +260,8 @@ class ModelManagementViewModel @Inject constructor(
                 )
                 // Remember it so [ModelAutoLoader] can warm the engine on the next cold start.
                 modelSettings.setLastModel(path, name, precision.name)
+            } catch (busy: InferenceError.ModelBusy) {
+                _loadError.value = busy.message
             } catch (e: Exception) {
                 _loadError.value = friendlyLoadError(e)
             }

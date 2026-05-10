@@ -27,7 +27,7 @@ object Routes {
     const val HOME = "home"
     const val PROJECT_DETAIL = "project/{projectId}"
     const val PROJECT_EDIT = "project/edit?projectId={projectId}"
-    const val CHAT = "chat/{chatId}"
+    const val CHAT = "chat/{chatId}?messageId={messageId}"
     const val NEW_CHAT = "chat/new/{projectId}?quickActionId={quickActionId}"
     const val MEMORY = "memory/{projectId}"
     const val SETTINGS = "settings"
@@ -44,7 +44,8 @@ object Routes {
 
     fun projectDetail(projectId: Long) = "project/$projectId"
     fun projectEdit(projectId: Long? = null) = "project/edit?projectId=${projectId ?: -1}"
-    fun chat(chatId: Long) = "chat/$chatId"
+    fun chat(chatId: Long, messageId: Long? = null) =
+        "chat/$chatId?messageId=${messageId ?: -1}"
     fun newChat(projectId: Long, quickActionId: Long? = null) =
         "chat/new/$projectId?quickActionId=${quickActionId ?: -1}"
     fun memory(projectId: Long) = "memory/$projectId"
@@ -58,6 +59,9 @@ fun ProjectsAINavGraph(navController: NavHostController) {
                 onProjectClick = { navController.navigate(Routes.projectDetail(it)) },
                 onNewProject = { navController.navigate(Routes.projectEdit()) },
                 onNewChat = { projectId -> navController.navigate(Routes.newChat(projectId)) },
+                onChatClick = { chatId, messageId ->
+                    navController.navigate(Routes.chat(chatId, messageId))
+                },
                 onSettingsClick = { navController.navigate(Routes.SETTINGS) },
                 onTranscribeClick = { navController.navigate(Routes.TRANSCRIPTION) },
                 onLinkedInClick = { navController.navigate(Routes.LINKEDIN) },
@@ -91,7 +95,10 @@ fun ProjectsAINavGraph(navController: NavHostController) {
 
         composable(
             Routes.CHAT,
-            arguments = listOf(navArgument("chatId") { type = NavType.LongType })
+            arguments = listOf(
+                navArgument("chatId") { type = NavType.LongType },
+                navArgument("messageId") { type = NavType.LongType; defaultValue = -1L },
+            )
         ) {
             ChatScreen(
                 onNavigateBack = { navController.popBackStack() },

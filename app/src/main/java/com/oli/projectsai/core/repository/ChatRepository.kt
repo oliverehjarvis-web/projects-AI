@@ -4,6 +4,7 @@ import com.oli.projectsai.core.db.dao.ChatDao
 import com.oli.projectsai.core.db.dao.MessageDao
 import com.oli.projectsai.core.db.entity.Chat
 import com.oli.projectsai.core.db.entity.Message
+import com.oli.projectsai.core.db.relation.MessageSearchHit
 import kotlinx.coroutines.flow.Flow
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -50,4 +51,11 @@ class ChatRepository @Inject constructor(
     suspend fun updateMessage(message: Message) = messageDao.update(message)
 
     suspend fun softDeleteMessage(id: Long) = messageDao.softDelete(id)
+
+    /** Cross-project message search excluding secret projects. Trimmed query; blank → empty. */
+    suspend fun searchMessages(query: String): List<MessageSearchHit> {
+        val trimmed = query.trim()
+        if (trimmed.isEmpty()) return emptyList()
+        return messageDao.searchMessages(trimmed)
+    }
 }

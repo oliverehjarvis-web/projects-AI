@@ -45,6 +45,7 @@ fun SettingsScreen(
     val syncState by viewModel.syncState.collectAsStateWithLifecycle()
     val voiceModelPath by viewModel.voiceModelPath.collectAsStateWithLifecycle()
     val voiceModelOptions by viewModel.voiceModelOptions.collectAsStateWithLifecycle()
+    val showReasoningByDefault by viewModel.showReasoningByDefault.collectAsStateWithLifecycle()
 
     // Auto-launch installer when APK is ready
     val currentUpdateState = updateState
@@ -146,6 +147,21 @@ fun SettingsScreen(
                 supportingContent = { Text("Your name and rules the assistant follows in every project.") },
                 leadingContent = { Icon(Icons.Default.Person, null) },
                 modifier = Modifier.clickable(onClick = onGlobalContext)
+            )
+
+            ListItem(
+                headlineContent = { Text("Show reasoning by default") },
+                supportingContent = {
+                    Text("Open <think> blocks automatically when assistant messages arrive. " +
+                        "Off keeps the answer focused and the reasoning a tap away.")
+                },
+                leadingContent = { Icon(Icons.Default.Psychology, null) },
+                trailingContent = {
+                    Switch(
+                        checked = showReasoningByDefault,
+                        onCheckedChange = { viewModel.setShowReasoningByDefault(it) }
+                    )
+                }
             )
 
             HorizontalDivider()
@@ -460,6 +476,12 @@ private fun RemoteServerSection(
     var modelDropdownExpanded by remember { mutableStateOf(false) }
     var modelToDelete by remember { mutableStateOf<SettingsViewModel.RemoteModel?>(null) }
 
+    val urlError = remember(draftUrl) { validateServerUrl(draftUrl) }
+    val tokenError = remember(draftToken) {
+        if (draftToken.isBlank()) "Token required" else null
+    }
+    val canSave = urlError == null && tokenError == null
+
     val installedModels = remoteModels.filter { it.installed }
 
     LaunchedEffect(installedModels) {
@@ -486,7 +508,11 @@ private fun RemoteServerSection(
             modifier = Modifier.fillMaxWidth(),
             label = { Text("Server URL") },
             placeholder = { Text("http://100.x.x.x:8765") },
-            singleLine = true
+            singleLine = true,
+            isError = draftUrl.isNotEmpty() && urlError != null,
+            supportingText = if (draftUrl.isNotEmpty() && urlError != null) {
+                { Text(urlError) }
+            } else null
         )
         OutlinedTextField(
             value = draftToken,
@@ -494,6 +520,10 @@ private fun RemoteServerSection(
             modifier = Modifier.fillMaxWidth(),
             label = { Text("API token") },
             singleLine = true,
+            isError = draftToken.isNotEmpty() && tokenError != null,
+            supportingText = if (draftToken.isNotEmpty() && tokenError != null) {
+                { Text(tokenError) }
+            } else null,
             visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation()
         )
 
@@ -654,14 +684,17 @@ private fun RemoteServerSection(
         }
 
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Button(onClick = {
-                onSave(draftUrl, draftToken, draftModel)
-                testResult = null
-                onTest(draftUrl, draftToken) { ok, msg ->
-                    testResult = ok to msg
-                    if (ok) onFetchModels(draftUrl, draftToken)
+            Button(
+                enabled = canSave,
+                onClick = {
+                    onSave(draftUrl, draftToken, draftModel)
+                    testResult = null
+                    onTest(draftUrl, draftToken) { ok, msg ->
+                        testResult = ok to msg
+                        if (ok) onFetchModels(draftUrl, draftToken)
+                    }
                 }
-            }) { Text("Save & Test") }
+            ) { Text("Save & Test") }
             OutlinedButton(
                 onClick = onSync,
                 enabled = syncState !is SyncState.Syncing
@@ -721,6 +754,24 @@ private fun RemoteServerSection(
             }
         )
     }
+}
+
+/**
+ * Lightweight URL sanity check before we let the user hit Save & Test. Checks scheme, host
+ * presence, and (when explicit) port range — catches the most common typos without trying to
+ * verify reachability, which is what the Test action is for.
+ */
+private fun validateServerUrl(raw: String): String? {
+    val trimmed = raw.trim()
+    if (trimmed.isEmpty()) return "URL required"
+    val parsed = runCatching { java.net.URI(trimmed) }.getOrNull()
+        ?: return "Not a valid URL"
+    val scheme = parsed.scheme?.lowercase()
+    if (scheme != "http" && scheme != "https") return "URL must start with http:// or https://"
+    if (parsed.host.isNullOrBlank()) return "Missing host"
+    val port = parsed.port
+    if (port != -1 && (port < 1 || port > 65_535)) return "Port out of range (1–65535)"
+    return null
 }
 
 @OptIn(ExperimentalMaterial3Api::class)

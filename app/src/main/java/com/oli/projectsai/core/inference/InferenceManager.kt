@@ -47,6 +47,18 @@ class InferenceManager @Inject constructor(
         remoteBackend.id to remoteBackend
     )
 
+    /**
+     * Set by [GenerationController] at construction time so this manager can refuse a
+     * model load while a generation is in flight. Default is "never busy" so unit tests
+     * and any future caller don't have to wire up a binder.
+     */
+    @Volatile private var generationActiveCheck: () -> Boolean = { false }
+
+    /** Called once by [GenerationController] in its `init`; safe to overwrite for tests. */
+    fun bindGenerationActiveCheck(check: () -> Boolean) {
+        generationActiveCheck = check
+    }
+
     fun getBackend(id: String): InferenceBackend? = backends[id]
 
     fun getAvailableBackends(): List<InferenceBackend> = backends.values.filter { it.isAvailable }
@@ -54,6 +66,11 @@ class InferenceManager @Inject constructor(
     fun getActiveBackend(): InferenceBackend? = backends.values.firstOrNull { it.isLoaded }
 
     suspend fun loadModel(modelInfo: ModelInfo, backendId: String = "local_litertlm") {
+        // Refuse if a generation is using the existing engine — swapping the model out from
+        // under it leaves the in-flight stream pointing at a freed runtime and the UI reading
+        // an inconsistent state. Caller (UI) catches this and surfaces a snackbar.
+        if (generationActiveCheck()) throw InferenceError.ModelBusy
+
         val backend = backends[backendId]
             ?: throw IllegalArgumentException("Unknown backend: $backendId")
 

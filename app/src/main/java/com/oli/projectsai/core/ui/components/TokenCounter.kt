@@ -1,6 +1,11 @@
 package com.oli.projectsai.core.ui.components
 
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.runtime.Immutable
 import androidx.compose.foundation.layout.*
@@ -13,6 +18,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.unit.dp
 import com.oli.projectsai.core.ui.theme.*
 
@@ -37,20 +43,45 @@ fun TokenCounter(
     compact: Boolean = false
 ) {
     val animatedUsage by animateFloatAsState(breakdown.usagePercent, label = "usage")
+    val pulseAlpha = rememberDangerPulseAlpha(breakdown)
 
     if (compact) {
-        CompactTokenCounter(breakdown, animatedUsage, modifier)
+        CompactTokenCounter(breakdown, animatedUsage, pulseAlpha, modifier)
     } else {
-        FullTokenCounter(breakdown, animatedUsage, modifier)
+        FullTokenCounter(breakdown, animatedUsage, pulseAlpha, modifier)
     }
+}
+
+/**
+ * Pulses between 0.6 and 1.0 once you cross [TokenBreakdown.isWarning], speeding up past
+ * [TokenBreakdown.isCritical]. Returns 1.0 (no pulse) below the warning threshold so the
+ * common case stays visually quiet.
+ */
+@Composable
+private fun rememberDangerPulseAlpha(breakdown: TokenBreakdown): Float {
+    if (!breakdown.isWarning) return 1f
+    val transition = rememberInfiniteTransition(label = "token-pulse")
+    val cycleMs = if (breakdown.isCritical) 600 else 1200
+    val alpha by transition.animateFloat(
+        initialValue = 0.6f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(cycleMs),
+            repeatMode = RepeatMode.Reverse,
+        ),
+        label = "alpha",
+    )
+    return alpha
 }
 
 @Composable
 private fun CompactTokenCounter(
     breakdown: TokenBreakdown,
     usage: Float,
+    pulseAlpha: Float,
     modifier: Modifier = Modifier
 ) {
+    val warningColor = warningColorFor(breakdown)
     Row(
         modifier = modifier.padding(horizontal = 12.dp, vertical = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -59,6 +90,8 @@ private fun CompactTokenCounter(
         TokenBar(
             breakdown = breakdown,
             usage = usage,
+            pulseAlpha = pulseAlpha,
+            warningColor = warningColor,
             modifier = Modifier
                 .weight(1f)
                 .height(6.dp)
@@ -66,17 +99,30 @@ private fun CompactTokenCounter(
         Text(
             text = "${breakdown.remaining}",
             style = MaterialTheme.typography.labelSmall,
-            color = if (breakdown.isWarning) TokenWarning else MaterialTheme.colorScheme.onSurfaceVariant
+            color = if (breakdown.isWarning) warningColor.copy(alpha = pulseAlpha)
+                    else MaterialTheme.colorScheme.onSurfaceVariant
         )
     }
+}
+
+/** Amber at >75%, smoothly shifting toward error red as we approach 100%. */
+@Composable
+private fun warningColorFor(breakdown: TokenBreakdown): Color {
+    if (!breakdown.isWarning) return TokenWarning
+    val errorColor = MaterialTheme.colorScheme.error
+    // 0 at 75% usage, 1 at 95%+ usage.
+    val t = ((breakdown.usagePercent - 0.75f) / 0.20f).coerceIn(0f, 1f)
+    return lerp(TokenWarning, errorColor, t)
 }
 
 @Composable
 private fun FullTokenCounter(
     breakdown: TokenBreakdown,
     usage: Float,
+    pulseAlpha: Float,
     modifier: Modifier = Modifier
 ) {
+    val warningColor = warningColorFor(breakdown)
     Column(
         modifier = modifier.padding(12.dp),
         verticalArrangement = Arrangement.spacedBy(6.dp)
@@ -84,6 +130,8 @@ private fun FullTokenCounter(
         TokenBar(
             breakdown = breakdown,
             usage = usage,
+            pulseAlpha = pulseAlpha,
+            warningColor = warningColor,
             modifier = Modifier
                 .fillMaxWidth()
                 .height(8.dp)
@@ -98,7 +146,7 @@ private fun FullTokenCounter(
             TokenLabel(
                 "Free",
                 breakdown.remaining,
-                if (breakdown.isWarning) TokenWarning else TokenRemaining
+                if (breakdown.isWarning) warningColor.copy(alpha = pulseAlpha) else TokenRemaining
             )
         }
     }
@@ -108,18 +156,26 @@ private fun FullTokenCounter(
 private fun TokenBar(
     breakdown: TokenBreakdown,
     usage: Float,
+    pulseAlpha: Float,
+    warningColor: Color,
     modifier: Modifier = Modifier
 ) {
     val total = breakdown.contextLimit.toFloat().coerceAtLeast(1f)
+    // Background tint of the unused segment: stays neutral grey when comfortable, picks up the
+    // warning colour with the breathing alpha once we cross 75 %.
+    val backgroundColor = if (breakdown.isWarning)
+        lerp(TokenRemaining, warningColor, pulseAlpha * 0.45f)
+    else
+        TokenRemaining
 
     Canvas(modifier = modifier) {
         val w = size.width
         val h = size.height
         val radius = h / 2
 
-        // Background
+        // Background (the "free" segment).
         drawRoundRect(
-            color = TokenRemaining,
+            color = backgroundColor,
             size = Size(w, h),
             cornerRadius = androidx.compose.ui.geometry.CornerRadius(radius)
         )

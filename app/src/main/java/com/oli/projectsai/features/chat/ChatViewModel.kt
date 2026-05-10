@@ -12,6 +12,7 @@ import com.oli.projectsai.core.db.entity.Chat
 import com.oli.projectsai.core.db.entity.Message
 import com.oli.projectsai.core.db.entity.MessageRole
 import com.oli.projectsai.features.repo.github.RepoSelectionStore
+import com.oli.projectsai.core.preferences.AssistantSettings
 import com.oli.projectsai.core.preferences.GlobalContextStore
 import com.oli.projectsai.core.preferences.SearchSettings
 import com.oli.projectsai.core.repository.ChatRepository
@@ -52,6 +53,7 @@ class ChatViewModel @Inject constructor(
     private val generationController: GenerationController,
     private val repoSelectionStore: RepoSelectionStore,
     private val searchSettings: SearchSettings,
+    private val assistantSettings: AssistantSettings,
     @ApplicationContext private val appContext: Context
 ) : ViewModel() {
 
@@ -63,6 +65,13 @@ class ChatViewModel @Inject constructor(
     private val chatId: Long = savedStateHandle.get<Long>("chatId") ?: -1L
     private val projectId: Long = savedStateHandle.get<Long>("projectId") ?: -1L
     private val quickActionId: Long = savedStateHandle.get<Long>("quickActionId") ?: -1L
+    /** Optional message id from a search-result deeplink; -1L means "no target". */
+    private val initialTargetMessageId: Long =
+        savedStateHandle.get<Long>("messageId") ?: -1L
+
+    private val _targetMessageId = MutableStateFlow(initialTargetMessageId.takeIf { it > 0L })
+    val targetMessageId: StateFlow<Long?> = _targetMessageId.asStateFlow()
+    fun consumeTargetMessageId() { _targetMessageId.value = null }
 
     private val _activeChatId = MutableStateFlow(chatId)
     private val activeChatId: Long get() = _activeChatId.value
@@ -124,6 +133,13 @@ class ChatViewModel @Inject constructor(
     private val _toggleWarning = MutableStateFlow<String?>(null)
     val toggleWarning: StateFlow<String?> = _toggleWarning.asStateFlow()
     fun consumeToggleWarning() { _toggleWarning.value = null }
+
+    /**
+     * UI default for whether finalised <think> blocks render expanded. Streaming blocks
+     * always show their tail expanded regardless — see ThinkAwareMarkdown in ChatScreen.
+     */
+    val showReasoningByDefault: StateFlow<Boolean> = assistantSettings.showReasoningByDefault
+        .stateIn(viewModelScope, SharingStarted.Eagerly, false)
 
     init {
         viewModelScope.launch {

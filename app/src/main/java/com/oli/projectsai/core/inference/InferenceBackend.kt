@@ -59,6 +59,10 @@ sealed class InferenceError(message: String, cause: Throwable? = null) : Excepti
     data object ThinkingBudgetExceeded : InferenceError(
         "Model spent too long inside <think> — generation aborted."
     )
+    /** Refused because a generation is in progress that would be left in an inconsistent state. */
+    data object ModelBusy : InferenceError(
+        "Stop the current response before switching models."
+    )
     class GenerationFailed(cause: Throwable) : InferenceError(
         cause.message ?: "Generation failed",
         cause
