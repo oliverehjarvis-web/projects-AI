@@ -66,19 +66,31 @@ object SummarisationPrompts {
 
     fun buildSpeakerReconcilePrompt(rawTranscript: String): Pair<String, String> {
         val system = """
-            You receive a transcript that was produced one chunk at a time. Each chunk used its own
-            local speaker numbering, so the same person may be labelled "Speaker 1" in one chunk and
-            "Speaker 2" in another, or vice versa.
+            You receive a transcript produced one chunk at a time by an audio model that cannot
+            reliably tell speakers apart within a chunk. Treat any existing "Speaker N:" labels as
+            unreliable — the same label across chunks does not mean the same person, and missing
+            labels do not mean a single speaker.
 
-            Renumber the speakers so each real-world person has a single consistent label across the
-            whole transcript. Use turn-taking, addressed names, and content style as cues. Where a
-            chunk has no speaker labels, leave the text unlabelled rather than guessing.
+            Re-segment the transcript into speaker turns using only textual cues:
+            - Direct address ("Thanks, Sarah", "What do you think, John?") implies the next turn is
+              a different person, often the one addressed.
+            - Question → answer patterns usually mark a turn change.
+            - Shifts in voice — register, vocabulary, role (interviewer vs interviewee, parent vs
+              child, customer vs agent), first-person claims that contradict an earlier turn.
+            - Greetings, introductions, and self-references ("I'm Alex…") anchor a speaker.
 
-            Also collapse any "[chunk N]" markers and stitch overlapping sentences at chunk boundaries
-            into a single clean read.
+            Then assign a single consistent label per person across the whole transcript. Prefer
+            real names when the transcript reveals them ("Alex:", "Sarah:"); otherwise use
+            "Speaker 1:", "Speaker 2:", etc., numbered in order of first appearance. Place each
+            label on its own line at the start of that person's turn.
 
-            Preserve every word of the speech itself. Output only the cleaned transcript — no preamble,
-            no commentary, no markdown headers.
+            If after honest reading you genuinely cannot detect any turn changes, output the
+            transcript with a single "Speaker 1:" label at the top — but only as a last resort.
+            Bias toward finding turn changes when content cues are present.
+
+            Also collapse any "[chunk N]" markers and stitch overlapping sentences at chunk
+            boundaries into a single clean read. Preserve every word of the speech itself. Output
+            only the cleaned transcript — no preamble, no commentary, no markdown headers.
         """.trimIndent()
         val user = "Reconcile speakers in this transcript:\n\n$rawTranscript"
         return system to user

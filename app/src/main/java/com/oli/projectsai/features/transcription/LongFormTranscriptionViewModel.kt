@@ -155,24 +155,34 @@ class LongFormTranscriptionViewModel @Inject constructor(
 
         if (identifySpeakers && partial.isNotBlank()) {
             _state.value = State.Reconciling(fileName, partial.toString())
-            try {
-                val (sys, usr) = SummarisationPrompts.buildSpeakerReconcilePrompt(partial.toString())
-                val out = StringBuilder()
-                inferenceManager.generate(
-                    systemPrompt = sys,
-                    messages = listOf(ChatMessage(role = "user", content = usr)),
-                    config = GenerationConfig(applyDefaultPreamble = false)
-                ).collect { token -> out.append(token) }
-                _state.value = State.Done(out.toString().trim())
-                return
-            } catch (ce: CancellationException) {
-                _state.value = State.Done(partial.toString().trim(), cancelled = true)
-                return
-            } catch (t: Throwable) {
-                // Reconcile is best-effort: if it fails, fall back to the raw stitched transcript.
-                _state.value = State.Done(partial.toString().trim())
-                return
+            val (sys, usr) = SummarisationPrompts.buildSpeakerReconcilePrompt(partial.toString())
+            // Text-only diarization benefits from the larger remote model when available, but
+            // fall through to whatever backend is loaded if the NAS can't be reached.
+            val preferred = listOfNotNull(
+                "remote_http".takeIf { inferenceManager.getBackend(it)?.isLoaded == true },
+                inferenceManager.getActiveBackend()?.id
+            ).distinct()
+            var reconciled: String? = null
+            for (backendId in preferred) {
+                try {
+                    val out = StringBuilder()
+                    inferenceManager.generate(
+                        systemPrompt = sys,
+                        messages = listOf(ChatMessage(role = "user", content = usr)),
+                        config = GenerationConfig(applyDefaultPreamble = false),
+                        backendId = backendId
+                    ).collect { token -> out.append(token) }
+                    reconciled = out.toString().trim()
+                    break
+                } catch (ce: CancellationException) {
+                    _state.value = State.Done(partial.toString().trim(), cancelled = true)
+                    return
+                } catch (_: Throwable) {
+                    // Try the next candidate; if none work, fall back to the raw transcript below.
+                }
             }
+            _state.value = State.Done(reconciled ?: partial.toString().trim())
+            return
         }
 
         _state.value = State.Done(partial.toString().trim())
