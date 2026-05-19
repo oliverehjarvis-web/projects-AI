@@ -57,6 +57,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.oli.projectsai.core.inference.LongTranscriptionState
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -110,7 +111,7 @@ fun LongFormTranscriptionScreen(
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
             when (val s = state) {
-                is LongFormTranscriptionViewModel.State.Idle -> IdleSection(
+                is LongTranscriptionState.Idle -> IdleSection(
                     identifySpeakers = identifySpeakers,
                     onToggleSpeakers = { identifySpeakers = it },
                     onPickFile = {
@@ -127,17 +128,17 @@ fun LongFormTranscriptionScreen(
                     }
                 )
 
-                is LongFormTranscriptionViewModel.State.Decoding -> StatusSection(
+                is LongTranscriptionState.Decoding -> StatusSection(
                     title = "Decoding ${s.fileName}…",
                     subtitle = "Converting to 16 kHz mono PCM. Large files take a few seconds."
                 )
 
-                is LongFormTranscriptionViewModel.State.Transcribing -> TranscribingSection(
+                is LongTranscriptionState.Transcribing -> TranscribingSection(
                     state = s,
                     onCancel = { viewModel.cancel() }
                 )
 
-                is LongFormTranscriptionViewModel.State.Reconciling -> {
+                is LongTranscriptionState.Reconciling -> {
                     StatusSection(
                         title = "Identifying speakers…",
                         subtitle = "Renumbering speaker labels across chunks for consistency."
@@ -152,7 +153,7 @@ fun LongFormTranscriptionScreen(
                     }
                 }
 
-                is LongFormTranscriptionViewModel.State.Done -> DoneSection(
+                is LongTranscriptionState.Done -> DoneSection(
                     transcript = s.transcript,
                     cancelled = s.cancelled,
                     onCopy = { viewModel.copyToClipboard(s.transcript) },
@@ -161,7 +162,7 @@ fun LongFormTranscriptionScreen(
                     onStartOver = { viewModel.reset() }
                 )
 
-                is LongFormTranscriptionViewModel.State.Error -> {
+                is LongTranscriptionState.Error -> {
                     Text(
                         s.message,
                         color = MaterialTheme.colorScheme.error,
@@ -297,7 +298,7 @@ private fun StatusSection(title: String, subtitle: String) {
 
 @Composable
 private fun TranscribingSection(
-    state: LongFormTranscriptionViewModel.State.Transcribing,
+    state: LongTranscriptionState.Transcribing,
     onCancel: () -> Unit
 ) {
     val progress = if (state.totalChunks > 0)
