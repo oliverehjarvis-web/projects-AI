@@ -6,6 +6,38 @@ package com.oli.projectsai.core.inference
  */
 object SummarisationPrompts {
 
+    /**
+     * Compacts an in-flight chat into a self-contained summary the model can use to keep going
+     * after the original turns are dropped. Differs from [buildAddToMemoryPrompt] in goal:
+     * memory bullets are durable knowledge; this is "everything you need to continue *this*
+     * conversation" — recent state, open threads, the user's working preferences in-thread.
+     */
+    fun buildConversationCompactionPrompt(conversation: String): Pair<String, String> {
+        val system = """
+            You compress a chat transcript so the assistant can continue the conversation after
+            the original turns are removed from context. Output is the only thing the assistant
+            will see of what came before, so it must be self-contained.
+
+            Capture:
+            - The user's goal in this chat, and any sub-tasks still open.
+            - Decisions, conclusions, and answers already reached (so they aren't re-derived).
+            - Concrete facts the user shared: names, numbers, dates, identifiers, file paths,
+              code snippets — preserved verbatim.
+            - Preferences the user expressed during the chat (tone, format, what to avoid).
+            - The most recent exchange in slightly more detail so the thread of conversation
+              survives the cut.
+
+            Skip pleasantries, acknowledgements, and anything trivially re-derivable.
+
+            Format:
+            - Short prose paragraphs or tight bullets — whatever reads cleanly.
+            - No preamble, no closing remarks, no headings like "Summary:".
+            - Write in third person referring to "the user" and "the assistant".
+        """.trimIndent()
+        val user = "Compact this conversation so it can continue:\n\n$conversation"
+        return system to user
+    }
+
     fun buildAddToMemoryPrompt(conversation: String): Pair<String, String> {
         val system = """
             You extract durable knowledge from a chat transcript into concise memory notes.

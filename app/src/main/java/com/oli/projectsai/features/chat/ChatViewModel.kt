@@ -134,6 +134,38 @@ class ChatViewModel @Inject constructor(
     val toggleWarning: StateFlow<String?> = _toggleWarning.asStateFlow()
     fun consumeToggleWarning() { _toggleWarning.value = null }
 
+    /** UI states for the compaction prompt / progress. */
+    enum class CompactState { Idle, Running, Done, Failed }
+    private val _compactState = MutableStateFlow(CompactState.Idle)
+    val compactState: StateFlow<CompactState> = _compactState.asStateFlow()
+
+    /**
+     * Per-session dismissal of the compaction banner. Auto-resets when usage drops back below
+     * 0.70 — so if the user dismisses at 76 % and the chat balloons further it doesn't nag,
+     * but a future chat that grows past the threshold again will re-prompt.
+     */
+    private val _compactPromptDismissed = MutableStateFlow(false)
+    fun dismissCompactPrompt() { _compactPromptDismissed.value = true }
+
+    /**
+     * Surfaces the compaction banner only when there is something to compact AND we're not
+     * mid-response. Conversation must have enough material to summarise (>= 4 turns) so a
+     * project with a huge memory block but an empty chat doesn't trigger it.
+     */
+    val showCompactPrompt: StateFlow<Boolean> = combine(
+        _tokenBreakdown,
+        isGenerating,
+        _compactState,
+        _compactPromptDismissed,
+        _messages,
+    ) { bd, generating, state, dismissed, msgs ->
+        bd.usagePercent > 0.75f &&
+            !generating &&
+            state == CompactState.Idle &&
+            !dismissed &&
+            msgs.count { it.role != MessageRole.SYSTEM } >= 4
+    }.stateIn(viewModelScope, SharingStarted.Eagerly, false)
+
     /**
      * UI default for whether finalised <think> blocks render expanded. Streaming blocks
      * always show their tail expanded regardless — see ThinkAwareMarkdown in ChatScreen.
@@ -142,6 +174,16 @@ class ChatViewModel @Inject constructor(
         .stateIn(viewModelScope, SharingStarted.Eagerly, false)
 
     init {
+        // Re-arm the compact banner if usage drops back below 0.70 after the user has dismissed
+        // it. Lets a user clear context (e.g. via Add to Memory + manual prune) without the
+        // dismiss flag suppressing future warnings.
+        viewModelScope.launch {
+            _tokenBreakdown.collect { bd ->
+                if (bd.usagePercent < 0.70f && _compactPromptDismissed.value) {
+                    _compactPromptDismissed.value = false
+                }
+            }
+        }
         viewModelScope.launch {
             combine(
                 inferenceManager.tokenizerVersion,
@@ -251,6 +293,7 @@ class ChatViewModel @Inject constructor(
         val attachments = _pendingAttachments.value
         if (content.isBlank() && attachments.isEmpty()) return
         if (generationController.activeGeneration.value != null) return
+        if (_compactState.value == CompactState.Running) return
 
         val trimmed = content.trim()
         viewModelScope.launch {
@@ -440,6 +483,64 @@ class ChatViewModel @Inject constructor(
         ).collect { chunk -> out.append(chunk) }
         return out.toString().trim()
     }
+
+    /**
+     * Replaces the live conversation with a single SYSTEM "earlier conversation summary"
+     * message so the model can keep chatting without the full transcript in context. Old
+     * messages are soft-deleted (recoverable via the sync layer), not hard-removed. No-op if
+     * a generation is in flight or there's nothing to compact.
+     */
+    fun compactConversation() {
+        if (generationController.activeGeneration.value != null) return
+        if (_compactState.value == CompactState.Running) return
+        val msgs = _messages.value.filter { it.role != MessageRole.SYSTEM }
+        if (msgs.size < 2) return
+        if (inferenceManager.modelState.value !is ModelState.Loaded) {
+            _compactState.value = CompactState.Failed
+            return
+        }
+        _compactState.value = CompactState.Running
+        viewModelScope.launch {
+            val transcript = msgs.joinToString("\n\n") { msg ->
+                val role = if (msg.role == MessageRole.USER) "User" else "Assistant"
+                "$role: ${msg.content}"
+            }
+            val summary = runCatching {
+                val (system, user) = SummarisationPrompts.buildConversationCompactionPrompt(transcript)
+                val out = StringBuilder()
+                inferenceManager.generate(
+                    systemPrompt = system,
+                    messages = listOf(ChatMessage(role = "user", content = user)),
+                    config = GenerationConfig(),
+                ).collect { chunk -> out.append(chunk) }
+                out.toString().trim()
+            }.getOrNull()
+
+            if (summary.isNullOrBlank()) {
+                _compactState.value = CompactState.Failed
+                return@launch
+            }
+
+            runCatching {
+                _messages.value.forEach { chatRepository.softDeleteMessage(it.id) }
+                chatRepository.addMessage(
+                    Message(
+                        chatId = activeChatId,
+                        role = MessageRole.SYSTEM,
+                        content = "[Earlier conversation summary]\n\n$summary",
+                        tokenCount = inferenceManager.countTokens(summary),
+                    )
+                )
+            }.onFailure {
+                _compactState.value = CompactState.Failed
+                return@launch
+            }
+            _compactPromptDismissed.value = false
+            _compactState.value = CompactState.Idle
+        }
+    }
+
+    fun resetCompactState() { _compactState.value = CompactState.Idle }
 
     fun addToMemory(summary: String) {
         viewModelScope.launch {

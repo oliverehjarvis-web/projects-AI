@@ -84,6 +84,8 @@ fun ChatScreen(
 
     val systemContext by viewModel.systemContext.collectAsStateWithLifecycle()
     val stagedRepoFiles by viewModel.stagedRepoFiles.collectAsStateWithLifecycle()
+    val showCompactPrompt by viewModel.showCompactPrompt.collectAsStateWithLifecycle()
+    val compactState by viewModel.compactState.collectAsStateWithLifecycle()
 
     var inputText by remember { mutableStateOf("") }
     var showTokenDetail by remember { mutableStateOf(false) }
@@ -232,6 +234,17 @@ fun ChatScreen(
             TokenCounter(
                 breakdown = tokenBreakdown,
                 compact = !showTokenDetail
+            )
+
+            // Compact-conversation banner — appears at >75 % usage when idle (not mid-generation)
+            // and offers to summarise the chat so it can keep going with a fresh context window.
+            CompactConversationBanner(
+                visible = showCompactPrompt,
+                state = compactState,
+                usagePercent = tokenBreakdown.usagePercent,
+                onCompact = { viewModel.compactConversation() },
+                onDismiss = { viewModel.dismissCompactPrompt() },
+                onDismissFailure = { viewModel.resetCompactState() },
             )
 
             // Context limit warning
@@ -638,6 +651,107 @@ private fun ThinkingDots() {
 }
 
 @Composable
+private fun CompactConversationBanner(
+    visible: Boolean,
+    state: ChatViewModel.CompactState,
+    usagePercent: Float,
+    onCompact: () -> Unit,
+    onDismiss: () -> Unit,
+    onDismissFailure: () -> Unit,
+) {
+    when (state) {
+        ChatViewModel.CompactState.Running -> {
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 12.dp, vertical = 4.dp),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.tertiaryContainer
+                )
+            ) {
+                Row(
+                    modifier = Modifier.padding(12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                    Text(
+                        "Compacting conversation…",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onTertiaryContainer
+                    )
+                }
+            }
+        }
+        ChatViewModel.CompactState.Failed -> {
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 12.dp, vertical = 4.dp),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.errorContainer
+                )
+            ) {
+                Row(
+                    modifier = Modifier.padding(12.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        "Couldn't compact the conversation — model not loaded or summary was empty.",
+                        modifier = Modifier.weight(1f),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onErrorContainer
+                    )
+                    IconButton(onClick = onDismissFailure) {
+                        Icon(Icons.Default.Close, "Dismiss")
+                    }
+                }
+            }
+        }
+        ChatViewModel.CompactState.Idle, ChatViewModel.CompactState.Done -> {
+            if (!visible) return
+            val pct = (usagePercent * 100).toInt().coerceIn(0, 100)
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 12.dp, vertical = 4.dp),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.secondaryContainer
+                )
+            ) {
+                Row(
+                    modifier = Modifier.padding(start = 12.dp, end = 4.dp, top = 8.dp, bottom = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Icon(
+                        Icons.Default.Compress,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSecondaryContainer
+                    )
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            "Context $pct% full",
+                            style = MaterialTheme.typography.labelLarge,
+                            color = MaterialTheme.colorScheme.onSecondaryContainer
+                        )
+                        Text(
+                            "Compact the chat into a short summary so it can keep going.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSecondaryContainer
+                        )
+                    }
+                    TextButton(onClick = onCompact) { Text("Compact") }
+                    IconButton(onClick = onDismiss) {
+                        Icon(Icons.Default.Close, "Dismiss")
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
 private fun DictationBanner(
     state: DictationState,
     rms: Float,
@@ -863,6 +977,49 @@ private fun rememberImageBitmap(path: String, maxDim: Int): ImageBitmap? {
     }
 }
 
+/**
+ * Renders a SYSTEM-role message — currently only used for the compaction summary that replaces
+ * an older transcript. Visually distinct from user/assistant turns: full-width, outlined,
+ * smaller text, leading icon so it reads as a context note rather than a chat reply.
+ */
+@Composable
+private fun SystemSummaryBubble(message: Message, highlighted: Boolean) {
+    val highlightAlpha by animateFloatAsState(
+        targetValue = if (highlighted) 1f else 0f,
+        animationSpec = tween(durationMillis = 600, easing = FastOutSlowInEasing),
+        label = "system-summary-highlight",
+    )
+    val borderColor = MaterialTheme.colorScheme.primary.copy(alpha = highlightAlpha)
+    OutlinedCard(
+        modifier = Modifier.fillMaxWidth(),
+        border = if (highlightAlpha > 0f)
+            androidx.compose.foundation.BorderStroke(2.dp, borderColor)
+        else androidx.compose.foundation.BorderStroke(
+            1.dp, MaterialTheme.colorScheme.outlineVariant
+        ),
+    ) {
+        Row(
+            modifier = Modifier.padding(12.dp),
+            verticalAlignment = Alignment.Top,
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Icon(
+                Icons.Default.Compress,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(18.dp)
+            )
+            SelectionContainer(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = message.content,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+    }
+}
+
 @Composable
 private fun MessageBubble(
     message: Message,
@@ -874,6 +1031,10 @@ private fun MessageBubble(
     onCopyCode: (String) -> Unit,
     onRegenerate: () -> Unit
 ) {
+    if (message.role == MessageRole.SYSTEM) {
+        SystemSummaryBubble(message = message, highlighted = highlighted)
+        return
+    }
     val isUser = message.role == MessageRole.USER
     // Brief tonal pulse on the matched search hit so the user sees where they landed.
     val highlightAlpha by animateFloatAsState(
