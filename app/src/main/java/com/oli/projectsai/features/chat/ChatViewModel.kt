@@ -246,9 +246,37 @@ class ChatViewModel @Inject constructor(
     /** Project context length, forwarded to the remote backend as num_ctx. */
     @Volatile private var contextWindowTokens: Int = 16384
 
+    /**
+     * The context window the breakdown should compare against. Always the *project*'s
+     * configured length — that's the value sent to Ollama as `num_ctx` (remote) and the value
+     * the local backend is loaded with (see [reloadModelIfContextDiffers]). The loaded-model's
+     * `modelInfo.contextLength` can lag — e.g. when the remote backend was loaded with the
+     * default 16384 but the project setting is 32768 — so reading it instead would size the
+     * bar against the wrong limit. Falls back to the model's value only when no project
+     * length has been resolved yet.
+     */
+    private fun effectiveContextLimit(): Int {
+        if (contextWindowTokens > 0) return contextWindowTokens
+        return inferenceManager.contextLimitFlow.value
+    }
+
     private suspend fun loadProjectContext(pid: Long) {
         contextProjectId = pid
         val project = projectRepository.getProject(pid) ?: return
+        applyProject(project)
+        reloadModelIfContextDiffers(project.contextLength)
+
+        // Live-watch the project so edits to contextLength / memoryTokenLimit / manual context /
+        // accumulated memory propagate without needing to reopen the chat. Without this the
+        // breakdown's contextLimit would be frozen at chat-open time.
+        viewModelScope.launch {
+            projectRepository.getProjectFlow(pid).collect { p ->
+                if (p != null) applyProject(p)
+            }
+        }
+    }
+
+    private suspend fun applyProject(project: com.oli.projectsai.core.db.entity.Project) {
         preferredBackendId = if (project.preferredBackend == com.oli.projectsai.core.db.entity.PreferredBackend.REMOTE)
             "remote_http" else null
         contextMemoryTokenLimit = project.memoryTokenLimit
@@ -259,14 +287,27 @@ class ChatViewModel @Inject constructor(
             name, rules, project.manualContext, project.accumulatedMemory, contextMemoryTokenLimit,
         )
         refreshContextTokenBreakdown(name, rules, project.manualContext, project.accumulatedMemory)
-        reloadModelIfContextDiffers(project.contextLength)
+        updateTokenBreakdown()
     }
 
+    /**
+     * Reloads the *currently active* backend with the project's context length when it differs.
+     * Only acts when the active backend matches the project's preferred backend — otherwise a
+     * remote-preferred project with a stale local model loaded would force-reload local with the
+     * wrong context length (and vice versa). The right backend gets loaded later via the
+     * user's normal flow (Settings → connect, or the model picker).
+     */
     private suspend fun reloadModelIfContextDiffers(projectContextLength: Int) {
         val loaded = inferenceManager.modelState.value as? ModelState.Loaded ?: return
         if (loaded.modelInfo.contextLength == projectContextLength) return
+        val activeBackendId = inferenceManager.getActiveBackend()?.id ?: return
+        val targetBackendId = preferredBackendId ?: "local_litertlm"
+        if (activeBackendId != targetBackendId) return
         runCatching {
-            inferenceManager.loadModel(loaded.modelInfo.copy(contextLength = projectContextLength))
+            inferenceManager.loadModel(
+                loaded.modelInfo.copy(contextLength = projectContextLength),
+                backendId = activeBackendId,
+            )
         }
     }
 
@@ -285,7 +326,7 @@ class ChatViewModel @Inject constructor(
             memory = inferenceManager.countTokens(
                 PromptBuilder.trimMemoryToLimit(memory, contextMemoryTokenLimit),
             ),
-            contextLimit = inferenceManager.contextLimitFlow.value,
+            contextLimit = effectiveContextLimit(),
         )
     }
 
@@ -442,7 +483,7 @@ class ChatViewModel @Inject constructor(
         val convTokens = inferenceManager.countTokens(joined)
         _tokenBreakdown.value = _tokenBreakdown.value.copy(
             conversation = convTokens,
-            contextLimit = inferenceManager.contextLimitFlow.value
+            contextLimit = effectiveContextLimit()
         )
     }
 
