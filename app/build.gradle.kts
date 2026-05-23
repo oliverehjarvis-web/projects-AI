@@ -14,8 +14,8 @@ android {
         applicationId = "com.oli.projectsai"
         minSdk = 33
         targetSdk = 35
-        versionCode = 60
-        versionName = "2.18.0"
+        versionCode = 61
+        versionName = "2.18.1"
     }
 
     buildTypes {
