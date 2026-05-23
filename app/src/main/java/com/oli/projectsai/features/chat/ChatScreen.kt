@@ -91,6 +91,7 @@ fun ChatScreen(
     var showTokenDetail by remember { mutableStateOf(false) }
     var showMemoryDialog by remember { mutableStateOf(false) }
     var showContextDialog by remember { mutableStateOf(false) }
+    var actionsMenuExpanded by remember { mutableStateOf(false) }
     val listState = rememberSaveable(saver = LazyListState.Saver) { LazyListState() }
     val context = LocalContext.current
     val snackbarHostState = remember { SnackbarHostState() }
@@ -197,9 +198,9 @@ fun ChatScreen(
                     }
                 },
                 actions = {
-                    IconButton(onClick = onNavigateToRepoBrowser) {
-                        Icon(Icons.Default.Source, "Browse GitHub repo")
-                    }
+                    // Web search stays visible because it's a per-message mode whose on/off state
+                    // is worth seeing at a glance; everything else collapses into the overflow menu
+                    // so the chat title has room to breathe.
                     IconButton(onClick = { viewModel.toggleWebSearch() }) {
                         Icon(
                             if (webSearchEnabled) Icons.Default.TravelExplore else Icons.Default.Public,
@@ -208,17 +209,56 @@ fun ChatScreen(
                             else LocalContentColor.current
                         )
                     }
-                    IconButton(onClick = { viewModel.shareConversation() }) {
-                        Icon(Icons.Default.Share, "Export conversation")
+                    IconButton(onClick = { actionsMenuExpanded = true }) {
+                        Icon(Icons.Default.MoreVert, "More actions")
                     }
-                    IconButton(onClick = { showContextDialog = true }) {
-                        Icon(Icons.Default.Info, "View Context")
-                    }
-                    IconButton(onClick = { showMemoryDialog = true }) {
-                        Icon(Icons.Default.Psychology, "Add to Memory")
-                    }
-                    IconButton(onClick = { showTokenDetail = !showTokenDetail }) {
-                        Icon(Icons.Default.DataUsage, "Token Usage")
+                    DropdownMenu(
+                        expanded = actionsMenuExpanded,
+                        onDismissRequest = { actionsMenuExpanded = false }
+                    ) {
+                        DropdownMenuItem(
+                            text = { Text("Browse GitHub repo") },
+                            leadingIcon = { Icon(Icons.Default.Source, null) },
+                            onClick = {
+                                actionsMenuExpanded = false
+                                onNavigateToRepoBrowser()
+                            }
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Export conversation") },
+                            leadingIcon = { Icon(Icons.Default.Share, null) },
+                            onClick = {
+                                actionsMenuExpanded = false
+                                viewModel.shareConversation()
+                            }
+                        )
+                        DropdownMenuItem(
+                            text = { Text("View context") },
+                            leadingIcon = { Icon(Icons.Default.Info, null) },
+                            onClick = {
+                                actionsMenuExpanded = false
+                                showContextDialog = true
+                            }
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Add to memory") },
+                            leadingIcon = { Icon(Icons.Default.Psychology, null) },
+                            onClick = {
+                                actionsMenuExpanded = false
+                                showMemoryDialog = true
+                            }
+                        )
+                        DropdownMenuItem(
+                            text = { Text(if (showTokenDetail) "Hide token usage" else "Show token usage") },
+                            leadingIcon = { Icon(Icons.Default.DataUsage, null) },
+                            trailingIcon = {
+                                if (showTokenDetail) Icon(Icons.Default.Check, null)
+                            },
+                            onClick = {
+                                actionsMenuExpanded = false
+                                showTokenDetail = !showTokenDetail
+                            }
+                        )
                     }
                 }
             )
