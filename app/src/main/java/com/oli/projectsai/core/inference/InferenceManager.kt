@@ -142,4 +142,14 @@ class InferenceManager @Inject constructor(
         }
         return backend.countTokens(text)
     }
+
+    /**
+     * Exact token usage the backend reported for its most recent generation, or null when the
+     * backend can't measure it. Consumed once per generation by [GenerationController] to record
+     * the assistant message's real token count. Returns null when no backend is active.
+     */
+    fun consumeLastUsage(backendId: String? = null): GenerationUsage? {
+        val backend = if (backendId != null) backends[backendId] else getActiveBackend()
+        return backend?.consumeLastUsage()
+    }
 }

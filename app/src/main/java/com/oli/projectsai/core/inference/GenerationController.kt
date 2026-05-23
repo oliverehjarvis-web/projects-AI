@@ -120,27 +120,35 @@ class GenerationController @Inject constructor(
         val fullResponse = StringBuilder()
         var cancelled = false
         try {
-            val chatMessages = messageAssembler.assemble(
+            val depth = if (params.webSearchEnabled) searchSettings.searchDepth.first()
+                        else SearchDepth.AUTO_FETCH
+            val effectiveSystemPrompt = composeSystemPrompt(
+                base = params.systemPrompt,
+                toolInstructions = toolInstructionsFor(params.webSearchEnabled, depth),
+            )
+
+            // Budget-trim the history against the *same* window the UI bar shows. The system
+            // prompt is mandatory, so we count it first and let ContextBudget decide how many
+            // recent turns fit alongside it without overflowing — instead of dumping the whole
+            // conversation and letting the backend silently drop the oldest tokens (which on
+            // Ollama means the system prompt + project memory).
+            val contextLimit = params.numCtx ?: DEFAULT_CONTEXT_LENGTH
+            val systemPromptTokens = inferenceManager.countTokens(effectiveSystemPrompt, params.backendId)
+            val assembled = messageAssembler.assemble(
                 chatId = chatId,
                 currentUserContent = params.currentUserContent,
                 currentAttachments = params.currentAttachments,
+                contextLimit = contextLimit,
+                systemPromptTokens = systemPromptTokens,
+                backendId = params.backendId,
             )
-
-            val depth = if (params.webSearchEnabled) searchSettings.searchDepth.first()
-                        else SearchDepth.AUTO_FETCH
-            val toolInstructions = when {
-                !params.webSearchEnabled -> ""
-                depth == SearchDepth.TOOL_LOOP -> TOOL_LOOP_INSTRUCTIONS
-                else -> AUTO_FETCH_INSTRUCTIONS
-            }
-            val effectiveSystemPrompt = buildList {
-                add(currentTemporalContext())
-                if (params.systemPrompt.isNotBlank()) add(params.systemPrompt)
-                if (toolInstructions.isNotBlank()) add(toolInstructions)
-            }.joinToString("\n\n")
+            val chatMessages = assembled.messages
 
             val genConfig = GenerationConfig(
-                maxOutputTokens = params.maxOutputTokens,
+                // Never request more output than the window can actually hold after the prompt.
+                // assembled.outputBudget is the precise post-trim figure; params.maxOutputTokens
+                // is the caller's ceiling (e.g. the thinking-model allowance).
+                maxOutputTokens = minOf(params.maxOutputTokens, assembled.outputBudget).coerceAtLeast(256),
                 applyDefaultPreamble = params.applyDefaultPreamble,
                 numCtx = params.numCtx,
             )
@@ -198,13 +206,18 @@ class GenerationController @Inject constructor(
             val responseText = fullResponse.toString()
             if (responseText.isNotBlank()) {
                 lastFailed.remove(chatId)
+                // Prefer the backend's exact completion-token count (remote reports it via the
+                // usage event); fall back to the estimator when unavailable (local backend).
+                val usage = inferenceManager.consumeLastUsage(params.backendId)
+                val tokenCount = usage?.completionTokens?.takeIf { it > 0 }
+                    ?: inferenceManager.countTokens(responseText, params.backendId)
                 runCatching {
                     chatRepository.addMessage(
                         Message(
                             chatId = chatId,
                             role = MessageRole.ASSISTANT,
                             content = if (cancelled) "$responseText _(stopped)_" else responseText,
-                            tokenCount = inferenceManager.countTokens(responseText),
+                            tokenCount = tokenCount,
                         ),
                     )
                 }

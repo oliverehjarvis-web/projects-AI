@@ -27,13 +27,23 @@ data class TokenBreakdown(
     val systemPrompt: Int = 0,
     val memory: Int = 0,
     val conversation: Int = 0,
-    val contextLimit: Int = 8192
+    // The usable input budget: the project's context window minus the reply reserve. The bar is
+    // sized against this so "full" reads as 100% — what the model actually receives as input can
+    // fill the whole bar, instead of the old behaviour where total could exceed the window while
+    // generation still (silently, lossily) worked.
+    val contextLimit: Int = 8192,
+    // Older turns that have slid out of the window. They remain in the transcript/DB, just not in
+    // what the model sees this turn.
+    val droppedTurns: Int = 0,
+    // Tokens held back from the input budget for the model's reply. Display-only.
+    val reservedOutput: Int = 0,
 ) {
     val total get() = systemPrompt + memory + conversation
     val remaining get() = (contextLimit - total).coerceAtLeast(0)
     val usagePercent get() = if (contextLimit > 0) total.toFloat() / contextLimit else 0f
     val isWarning get() = usagePercent > 0.75f
-    val isCritical get() = usagePercent > 0.85f
+    val isCritical get() = usagePercent > 0.9f
+    val historyTrimmed get() = droppedTurns > 0
 }
 
 @Composable
@@ -147,6 +157,20 @@ private fun FullTokenCounter(
                 "Free",
                 breakdown.remaining,
                 if (breakdown.isWarning) warningColor.copy(alpha = pulseAlpha) else TokenRemaining
+            )
+        }
+        if (breakdown.historyTrimmed || breakdown.reservedOutput > 0) {
+            val parts = buildList {
+                if (breakdown.historyTrimmed) {
+                    val turns = breakdown.droppedTurns
+                    add("$turns older ${if (turns == 1) "turn" else "turns"} out of context")
+                }
+                if (breakdown.reservedOutput > 0) add("${breakdown.reservedOutput} reserved for reply")
+            }
+            Text(
+                parts.joinToString(" · "),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
     }

@@ -26,18 +26,23 @@ class RemoteHttpBackend @Inject constructor(
 ) : InferenceBackend {
 
     companion object {
-        private const val CHARS_PER_TOKEN = 4.0f
         // SSE idle timeout: generous to accommodate cold starts on large models, long prompt
         // processing, and slower hardware. Ten minutes of silence before we assume the stream has
         // hung — first-token latency is the usual offender, tokens then flow every few hundred ms.
         private const val STREAM_IDLE_TIMEOUT_MS = 600_000
+        // Weight given to each fresh server measurement when smoothing the chars/token estimate.
+        private const val CALIBRATION_ALPHA = 0.3f
     }
 
     // Cached for the synchronous `isAvailable` property; the suspend paths read freshly.
     @Volatile private var serverUrlSnapshot: String = ""
     @Volatile private var _isLoaded: Boolean = false
-    // Set when the server reports token usage in the DONE event; consumed by countTokens().
-    @Volatile private var _lastCompletionTokens: Int? = null
+    // Exact usage from the most recent generation's `usage` event; consumed once by the caller.
+    @Volatile private var _lastUsage: GenerationUsage? = null
+    // Character length of the last prompt we sent, paired with the server's reported prompt-token
+    // count to calibrate [calibratedCharsPerToken] so future estimates track this model/tokenizer.
+    @Volatile private var lastPromptChars: Int = 0
+    @Volatile private var calibratedCharsPerToken: Float = ContextBudget.DEFAULT_CHARS_PER_TOKEN
 
     init {
         remoteSettings.serverUrl.onEach { serverUrlSnapshot = it }.launchIn(scope)
@@ -95,6 +100,9 @@ class RemoteHttpBackend @Inject constructor(
             )
         }
 
+        // Track what we sent so the server's prompt_eval_count can calibrate our estimate.
+        lastPromptChars = systemPrompt.length + messages.sumOf { it.content.length }
+
         val body = JSONObject().apply {
             put("system_prompt", systemPrompt)
             // Tell the server the client has already folded global context into
@@ -149,8 +157,12 @@ class RemoteHttpBackend @Inject constructor(
                     }
                     if (obj.has("usage")) {
                         val usage = obj.getJSONObject("usage")
-                        val ct = usage.optInt("completion_tokens", 0)
-                        if (ct > 0) _lastCompletionTokens = ct
+                        val promptTokens = usage.optInt("prompt_tokens", 0)
+                        val completionTokens = usage.optInt("completion_tokens", 0)
+                        if (promptTokens > 0 || completionTokens > 0) {
+                            _lastUsage = GenerationUsage(promptTokens, completionTokens)
+                        }
+                        recalibrate(promptTokens)
                     }
                     val chunk = obj.optString("token", "")
                     if (chunk.isNotEmpty()) emit(chunk)
@@ -178,13 +190,31 @@ class RemoteHttpBackend @Inject constructor(
         throw InferenceError.TranscriptionFailed(UnsupportedOperationException("Transcription is not supported on the remote backend"))
     }
 
-    override suspend fun countTokens(text: String): Int {
-        _lastCompletionTokens?.let { stored ->
-            _lastCompletionTokens = null
-            return stored
-        }
-        return if (text.isEmpty()) 0
-        else (text.length / CHARS_PER_TOKEN).toInt().coerceAtLeast(1)
+    /**
+     * Pure length-based estimate using the [calibratedCharsPerToken] ratio learned from the
+     * server's reported prompt-token counts. Unlike before, this no longer returns the previous
+     * completion's exact count for an unrelated call — exact counts are surfaced via
+     * [consumeLastUsage] instead, so estimates and measurements never get crossed.
+     */
+    override suspend fun countTokens(text: String): Int =
+        ContextBudget.estimateTokens(text, calibratedCharsPerToken)
+
+    override fun consumeLastUsage(): GenerationUsage? {
+        val usage = _lastUsage
+        _lastUsage = null
+        return usage
+    }
+
+    /**
+     * Nudges [calibratedCharsPerToken] toward the ratio implied by the last prompt's character
+     * length and the server's actual prompt-token count, smoothed so a single odd request can't
+     * swing the estimate wildly. Clamped to a sane band for SentencePiece-style tokenizers.
+     */
+    private fun recalibrate(promptTokens: Int) {
+        if (promptTokens <= 0 || lastPromptChars <= 0) return
+        val observed = lastPromptChars.toFloat() / promptTokens
+        val blended = calibratedCharsPerToken * (1 - CALIBRATION_ALPHA) + observed * CALIBRATION_ALPHA
+        calibratedCharsPerToken = blended.coerceIn(2.0f, 8.0f)
     }
 
     private fun formatErrorBody(body: String): String =

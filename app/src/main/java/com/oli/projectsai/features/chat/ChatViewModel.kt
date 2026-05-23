@@ -14,11 +14,15 @@ import com.oli.projectsai.core.db.entity.MessageRole
 import com.oli.projectsai.features.repo.github.RepoSelectionStore
 import com.oli.projectsai.core.preferences.AssistantSettings
 import com.oli.projectsai.core.preferences.GlobalContextStore
+import com.oli.projectsai.core.preferences.SearchDepth
 import com.oli.projectsai.core.preferences.SearchSettings
 import com.oli.projectsai.core.repository.ChatRepository
 import com.oli.projectsai.core.repository.ProjectRepository
 import com.oli.projectsai.core.inference.ChatError
 import com.oli.projectsai.core.inference.ChatMessage
+import com.oli.projectsai.core.inference.ContextBudget
+import com.oli.projectsai.core.inference.composeSystemPrompt
+import com.oli.projectsai.core.inference.toolInstructionsFor
 import com.oli.projectsai.core.inference.GenerationConfig
 import com.oli.projectsai.core.inference.GenerationController
 import com.oli.projectsai.core.inference.GenerationForegroundService
@@ -191,18 +195,25 @@ class ChatViewModel @Inject constructor(
                 globalContextStore.name,
                 globalContextStore.rules
             ) { _, _, name, rules -> name to rules }.collect { (name, rules) ->
+                currentName = name
+                currentRules = rules
                 if (contextProjectId != -1L) {
                     val p = projectRepository.getProject(contextProjectId)
                     if (p != null) {
                         contextMemoryTokenLimit = p.memoryTokenLimit
+                        currentMemory = p.accumulatedMemory
                         systemPrompt = PromptBuilder.buildSystemPrompt(
                             name, rules, p.manualContext, p.accumulatedMemory, contextMemoryTokenLimit,
                         )
-                        refreshContextTokenBreakdown(name, rules, p.manualContext, p.accumulatedMemory)
                     }
                 }
-                updateTokenBreakdown()
+                recomputeBreakdown()
             }
+        }
+        // Staged GitHub repo files count toward the prompt that gets sent next turn, so keep the
+        // bar honest as the user stages/clears them.
+        viewModelScope.launch {
+            repoSelectionStore.staged.collect { recomputeBreakdown() }
         }
         viewModelScope.launch {
             if (chatId != -1L) {
@@ -246,16 +257,21 @@ class ChatViewModel @Inject constructor(
     /** Project context length, forwarded to the remote backend as num_ctx. */
     @Volatile private var contextWindowTokens: Int = 16384
 
+    // Cached project/global inputs to the system prompt, so [recomputeBreakdown] can size the
+    // memory segment without re-reading the project on every message tick.
+    @Volatile private var currentName: String = ""
+    @Volatile private var currentRules: String = ""
+    @Volatile private var currentMemory: String = ""
+
     /**
-     * The context window the breakdown should compare against. Always the *project*'s
-     * configured length — that's the value sent to Ollama as `num_ctx` (remote) and the value
-     * the local backend is loaded with (see [reloadModelIfContextDiffers]). The loaded-model's
-     * `modelInfo.contextLength` can lag — e.g. when the remote backend was loaded with the
-     * default 16384 but the project setting is 32768 — so reading it instead would size the
-     * bar against the wrong limit. Falls back to the model's value only when no project
-     * length has been resolved yet.
+     * The full context window the project is configured for — the value sent to Ollama as
+     * `num_ctx` (remote) and the value the local backend is loaded with (see
+     * [reloadModelIfContextDiffers]). The loaded-model's `modelInfo.contextLength` can lag — e.g.
+     * when the remote backend was loaded with the default 16384 but the project setting is 32768 —
+     * so reading it instead would size the budget against the wrong limit. Falls back to the
+     * model's value only when no project length has been resolved yet.
      */
-    private fun effectiveContextLimit(): Int {
+    private fun contextWindow(): Int {
         if (contextWindowTokens > 0) return contextWindowTokens
         return inferenceManager.contextLimitFlow.value
     }
@@ -283,11 +299,13 @@ class ChatViewModel @Inject constructor(
         contextWindowTokens = project.contextLength
         val name = globalContextStore.name.first()
         val rules = globalContextStore.rules.first()
+        currentName = name
+        currentRules = rules
+        currentMemory = project.accumulatedMemory
         systemPrompt = PromptBuilder.buildSystemPrompt(
             name, rules, project.manualContext, project.accumulatedMemory, contextMemoryTokenLimit,
         )
-        refreshContextTokenBreakdown(name, rules, project.manualContext, project.accumulatedMemory)
-        updateTokenBreakdown()
+        recomputeBreakdown()
     }
 
     /**
@@ -311,22 +329,43 @@ class ChatViewModel @Inject constructor(
         }
     }
 
-    private suspend fun refreshContextTokenBreakdown(
-        name: String,
-        rules: String,
-        manualContext: String,
-        memory: String,
-    ) {
-        val systemText = listOfNotNull(
-            PromptBuilder.buildGlobalBlock(name, rules).ifBlank { null },
-            manualContext.ifBlank { null },
-        ).joinToString("\n\n")
-        _tokenBreakdown.value = _tokenBreakdown.value.copy(
-            systemPrompt = inferenceManager.countTokens(systemText),
-            memory = inferenceManager.countTokens(
-                PromptBuilder.trimMemoryToLimit(memory, contextMemoryTokenLimit),
-            ),
-            contextLimit = effectiveContextLimit(),
+    /**
+     * Recomputes the token bar so it reflects *exactly* what the next generation will send:
+     * the same effective system prompt ([composeSystemPrompt]) and the same sliding-window trim
+     * ([ContextBudget.fit]) the [GenerationController] uses. Splitting the result into the bar's
+     * system/memory/conversation segments is presentation only — the totals and the limit are the
+     * real budgeted figures, so the bar and the model can no longer disagree.
+     */
+    private suspend fun recomputeBreakdown() {
+        val window = contextWindow()
+        val reserve = ContextBudget.outputReserveFor(window)
+        val inputBudget = ContextBudget.inputBudgetFor(window, reserve)
+
+        val memoryText = PromptBuilder.trimMemoryToLimit(currentMemory, contextMemoryTokenLimit)
+        val memoryTokens = inferenceManager.countTokens(memoryText)
+
+        // Build the effective system prompt the same way generation will: project base +
+        // staged repo files + web-search tool instructions + temporal block.
+        val repoBlock = PromptBuilder.buildRepoContextBlock(repoSelectionStore.staged.value)
+        val base = listOf(systemPrompt, repoBlock).filter { it.isNotBlank() }.joinToString("\n\n")
+        val depth = if (_webSearchEnabled.value) searchSettings.searchDepth.first() else SearchDepth.AUTO_FETCH
+        val effectiveSystem = composeSystemPrompt(base, toolInstructionsFor(_webSearchEnabled.value, depth))
+        val systemTokens = inferenceManager.countTokens(effectiveSystem)
+
+        val counts = _messages.value.map {
+            it.tokenCount.takeIf { c -> c > 0 } ?: ContextBudget.estimateTokens(it.content)
+        }
+        val fit = ContextBudget.fit(window, systemTokens, counts, reserve)
+
+        _tokenBreakdown.value = TokenBreakdown(
+            // Memory is part of the system prompt; show it as its own segment and attribute the
+            // remainder (global profile + project context + temporal + tool/repo blocks) to system.
+            systemPrompt = (systemTokens - memoryTokens).coerceAtLeast(0),
+            memory = memoryTokens,
+            conversation = fit.conversationTokens,
+            contextLimit = inputBudget,
+            droppedTurns = fit.droppedCount,
+            reservedOutput = reserve,
         )
     }
 
@@ -416,6 +455,8 @@ class ChatViewModel @Inject constructor(
         _webSearchEnabled.value = next
         viewModelScope.launch {
             runCatching { chatRepository.updateWebSearchEnabled(activeChatId, next) }
+            // Tool instructions enter/leave the system prompt with this toggle — keep the bar honest.
+            recomputeBreakdown()
             if (next && searchSettings.searxngUrl.first().isBlank()) {
                 _toggleWarning.value =
                     "Web search is on but no SearXNG instance is configured. Add one in Settings → Web search."
@@ -428,14 +469,6 @@ class ChatViewModel @Inject constructor(
         currentAttachments: List<String>,
         titleHint: String,
     ) {
-        // Cap output to the remaining context budget. Subtract a small buffer for the current
-        // user message which may not yet be counted in the breakdown (flow hasn't fired yet).
-        // Falls back to 16000 when context size is unknown (no model loaded).
-        val adaptiveMaxTokens = run {
-            val bd = _tokenBreakdown.value
-            if (bd.contextLimit > 0 && bd.remaining > 0) (bd.remaining - 200).coerceIn(256, 16000)
-            else 16000
-        }
         // Pull the staged repo files (if any) and append them to the system prompt for this
         // turn. The block is then cleared so follow-up turns don't keep re-injecting them —
         // the user can re-stage from the browser whenever they need them again.
@@ -457,7 +490,9 @@ class ChatViewModel @Inject constructor(
             // Quick Actions are short, direct operations that don't benefit from the server's
             // reasoning preamble — suppress it so responses stay concise.
             applyDefaultPreamble = quickActionId == -1L,
-            maxOutputTokens = adaptiveMaxTokens,
+            // Ceiling only — GenerationController clamps this down to the exact tokens left in the
+            // window after the (post-trim) prompt, so output can never push the request past num_ctx.
+            maxOutputTokens = 16000,
             // Forwarded as Ollama's num_ctx for remote calls. Without it the 26B silently
             // ran at the 2048 default regardless of the project's contextLength setting.
             numCtx = contextWindowTokens,
@@ -478,14 +513,7 @@ class ChatViewModel @Inject constructor(
     fun consumeTranscribedText(): String? = dictationManager.consumeTranscribed()
     fun dismissDictationError() = dictationManager.dismissError()
 
-    private suspend fun updateTokenBreakdown() {
-        val joined = _messages.value.joinToString("\n") { it.content }
-        val convTokens = inferenceManager.countTokens(joined)
-        _tokenBreakdown.value = _tokenBreakdown.value.copy(
-            conversation = convTokens,
-            contextLimit = effectiveContextLimit()
-        )
-    }
+    private suspend fun updateTokenBreakdown() = recomputeBreakdown()
 
     fun copyToClipboard(text: String) = appContext.copyToClipboard(text)
 

@@ -1,6 +1,7 @@
 package com.oli.projectsai.core.inference
 
 import com.oli.projectsai.core.db.entity.MessageRole
+import com.oli.projectsai.core.preferences.SearchDepth
 import java.time.ZonedDateTime
 import java.time.format.DateTimeFormatter
 
@@ -76,6 +77,32 @@ internal fun MessageRole.toWireRole(): String = when (this) {
     MessageRole.ASSISTANT -> "assistant"
     MessageRole.SYSTEM -> "system"
 }
+
+/**
+ * Selects the web-search tool instructions to fold into the system prompt, or "" when search
+ * is off. Shared so the chat UI's token bar can account for the exact same block that the
+ * generation path will send.
+ */
+internal fun toolInstructionsFor(webSearchEnabled: Boolean, depth: SearchDepth): String = when {
+    !webSearchEnabled -> ""
+    depth == SearchDepth.TOOL_LOOP -> TOOL_LOOP_INSTRUCTIONS
+    else -> AUTO_FETCH_INSTRUCTIONS
+}
+
+/**
+ * Composes the final system prompt sent to the model: the temporal block, the caller's base
+ * prompt (global profile + project context + memory + any staged repo files), and the web-search
+ * tool instructions when enabled.
+ *
+ * This is the single source of truth for system-prompt assembly. Both [GenerationController]
+ * (to send) and the chat ViewModel (to size the token bar against what's actually sent) call it,
+ * so the bar can never again disagree with reality.
+ */
+internal fun composeSystemPrompt(base: String, toolInstructions: String): String = buildList {
+    add(currentTemporalContext())
+    if (base.isNotBlank()) add(base)
+    if (toolInstructions.isNotBlank()) add(toolInstructions)
+}.joinToString("\n\n")
 
 internal fun currentTemporalContext(): String {
     val now = ZonedDateTime.now()

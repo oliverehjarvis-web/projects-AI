@@ -107,4 +107,16 @@ interface InferenceBackend {
     suspend fun transcribe(pcm16MonoBytes: ByteArray, promptOverride: String? = null): String
 
     suspend fun countTokens(text: String): Int
+
+    /**
+     * Returns the exact prompt/completion token counts the backend reported for the most recent
+     * generation, clearing them so each report is consumed once. Backends that can't measure real
+     * usage (e.g. the on-device engine, which exposes no tokenizer) return null and callers fall
+     * back to [countTokens]. The remote backend additionally uses the reported prompt-token count
+     * to calibrate its character-per-token estimate over time.
+     */
+    fun consumeLastUsage(): GenerationUsage? = null
 }
+
+/** Exact token usage reported by a backend for one generation. */
+data class GenerationUsage(val promptTokens: Int, val completionTokens: Int)
