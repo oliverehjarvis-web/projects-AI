@@ -177,6 +177,24 @@ class ChatViewModel @Inject constructor(
     val showReasoningByDefault: StateFlow<Boolean> = assistantSettings.showReasoningByDefault
         .stateIn(viewModelScope, SharingStarted.Eagerly, false)
 
+    // These MUST be declared before `init`. The init block collects `repoSelectionStore.staged`,
+    // a StateFlow that emits its current value synchronously on subscription; under
+    // viewModelScope's Main.immediate dispatcher that runs `recomputeBreakdown()` inline during
+    // construction. If these fields were declared after `init` they'd still hold JVM zero-values
+    // at that point (notably `currentMemory == null` despite its non-null type), crashing the VM
+    // the moment any chat screen opens.
+    private var contextProjectId: Long = -1L
+    @Volatile private var preferredBackendId: String? = null
+    @Volatile private var contextMemoryTokenLimit: Int = Int.MAX_VALUE
+    /** Project context length, forwarded to the remote backend as num_ctx. */
+    @Volatile private var contextWindowTokens: Int = 16384
+
+    // Cached project/global inputs to the system prompt, so [recomputeBreakdown] can size the
+    // memory segment without re-reading the project on every message tick.
+    @Volatile private var currentName: String = ""
+    @Volatile private var currentRules: String = ""
+    @Volatile private var currentMemory: String = ""
+
     init {
         // Re-arm the compact banner if usage drops back below 0.70 after the user has dismissed
         // it. Lets a user clear context (e.g. via Add to Memory + manual prune) without the
@@ -250,18 +268,6 @@ class ChatViewModel @Inject constructor(
             }
         }
     }
-
-    private var contextProjectId: Long = -1L
-    @Volatile private var preferredBackendId: String? = null
-    @Volatile private var contextMemoryTokenLimit: Int = Int.MAX_VALUE
-    /** Project context length, forwarded to the remote backend as num_ctx. */
-    @Volatile private var contextWindowTokens: Int = 16384
-
-    // Cached project/global inputs to the system prompt, so [recomputeBreakdown] can size the
-    // memory segment without re-reading the project on every message tick.
-    @Volatile private var currentName: String = ""
-    @Volatile private var currentRules: String = ""
-    @Volatile private var currentMemory: String = ""
 
     /**
      * The full context window the project is configured for — the value sent to Ollama as
