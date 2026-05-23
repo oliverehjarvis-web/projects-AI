@@ -12,4 +12,6 @@ data class GenerationParams(
     val maxOutputTokens: Int = 16000,
     /** Forwarded to remote backends so Ollama loads with the right window. */
     val numCtx: Int? = null,
+    /** Per-`<think>`-block character budget; <= 0 disables the runaway-thinking abort. */
+    val thinkBudgetChars: Int = THINK_BUDGET_CHARS,
 )

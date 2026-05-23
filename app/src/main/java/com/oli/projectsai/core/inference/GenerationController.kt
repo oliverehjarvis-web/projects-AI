@@ -151,6 +151,7 @@ class GenerationController @Inject constructor(
                 maxOutputTokens = minOf(params.maxOutputTokens, assembled.outputBudget).coerceAtLeast(256),
                 applyDefaultPreamble = params.applyDefaultPreamble,
                 numCtx = params.numCtx,
+                thinkBudgetChars = params.thinkBudgetChars,
             )
             cancelled = when (depth.takeIf { params.webSearchEnabled }) {
                 SearchDepth.TOOL_LOOP -> agentRunner.runToolLoop(
@@ -240,7 +241,7 @@ class GenerationController @Inject constructor(
     ): Boolean {
         var firstTokenReceived = false
         var showingSlowWarning = false
-        val tracker = ThinkBudgetTracker()
+        val tracker = ThinkBudgetTracker(config.thinkBudgetChars)
         val slowJob = scope.launch {
             delay(SLOW_RESPONSE_THRESHOLD_MS)
             showingSlowWarning = true

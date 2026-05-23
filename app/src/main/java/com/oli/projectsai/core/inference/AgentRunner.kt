@@ -42,7 +42,7 @@ class AgentRunner @Inject constructor(
         onSearchStatus: (String?) -> Unit,
     ): Boolean {
         val firstBuf = StringBuilder()
-        val firstTracker = ThinkBudgetTracker()
+        val firstTracker = ThinkBudgetTracker(config.thinkBudgetChars)
         var cancelled = try {
             inferenceManager.generate(
                 systemPrompt = systemPromptText,
@@ -98,7 +98,7 @@ class AgentRunner @Inject constructor(
             ),
         )
         onStreaming("")
-        val followTracker = ThinkBudgetTracker()
+        val followTracker = ThinkBudgetTracker(config.thinkBudgetChars)
         cancelled = try {
             inferenceManager.generate(
                 systemPrompt = systemPromptText,
@@ -131,7 +131,7 @@ class AgentRunner @Inject constructor(
         var conversation = chatMessages
         repeat(TOOL_LOOP_MAX_ROUNDS) { round ->
             val buf = StringBuilder()
-            val tracker = ThinkBudgetTracker()
+            val tracker = ThinkBudgetTracker(config.thinkBudgetChars)
             // Only apply the preamble on the first round; subsequent rounds are continuations.
             val roundConfig = if (round == 0) config else config.copy(applyDefaultPreamble = false)
             val cancelled = try {

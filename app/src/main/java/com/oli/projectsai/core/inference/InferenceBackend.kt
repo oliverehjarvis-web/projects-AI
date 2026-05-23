@@ -30,7 +30,12 @@ data class GenerationConfig(
      * (which on Ollama is 2048 — fine for short prompts but wrong for repo ingestion).
      * Ignored by the local backend, which sets context at model-load time via [ModelInfo].
      */
-    val numCtx: Int? = null
+    val numCtx: Int? = null,
+    /**
+     * Character budget for a single `<think>` block before generation is aborted. <= 0 means no
+     * limit (the user has turned off "Limit thinking time"). Defaults to the standing ceiling.
+     */
+    val thinkBudgetChars: Int = THINK_BUDGET_CHARS,
 )
 
 enum class ModelPrecision(

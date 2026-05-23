@@ -107,6 +107,13 @@ class SettingsViewModel @Inject constructor(
         viewModelScope.launch { assistantSettings.setShowReasoningByDefault(value) }
     }
 
+    val limitThinkingTime: StateFlow<Boolean> = assistantSettings.limitThinkingTime
+        .stateIn(viewModelScope, SharingStarted.Eagerly, false)
+
+    fun setLimitThinkingTime(value: Boolean) {
+        viewModelScope.launch { assistantSettings.setLimitThinkingTime(value) }
+    }
+
     val serverUrl: StateFlow<String> = remoteSettings.serverUrl.stateIn(
         viewModelScope, SharingStarted.Eagerly, ""
     )

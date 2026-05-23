@@ -46,6 +46,7 @@ fun SettingsScreen(
     val voiceModelPath by viewModel.voiceModelPath.collectAsStateWithLifecycle()
     val voiceModelOptions by viewModel.voiceModelOptions.collectAsStateWithLifecycle()
     val showReasoningByDefault by viewModel.showReasoningByDefault.collectAsStateWithLifecycle()
+    val limitThinkingTime by viewModel.limitThinkingTime.collectAsStateWithLifecycle()
 
     // Auto-launch installer when APK is ready
     val currentUpdateState = updateState
@@ -160,6 +161,22 @@ fun SettingsScreen(
                     Switch(
                         checked = showReasoningByDefault,
                         onCheckedChange = { viewModel.setShowReasoningByDefault(it) }
+                    )
+                }
+            )
+
+            ListItem(
+                headlineContent = { Text("Limit thinking time") },
+                supportingContent = {
+                    Text("Stop the model if it spends too long inside a <think> block. " +
+                        "Off lets it deliberate as long as it needs — better for complex prompts " +
+                        "on slower models, at the cost of occasionally waiting a while.")
+                },
+                leadingContent = { Icon(Icons.Default.HourglassEmpty, null) },
+                trailingContent = {
+                    Switch(
+                        checked = limitThinkingTime,
+                        onCheckedChange = { viewModel.setLimitThinkingTime(it) }
                     )
                 }
             )

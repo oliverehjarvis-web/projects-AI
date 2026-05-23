@@ -31,6 +31,7 @@ import com.oli.projectsai.core.inference.InferenceError
 import com.oli.projectsai.core.inference.InferenceManager
 import com.oli.projectsai.core.inference.ModelState
 import com.oli.projectsai.core.inference.SummarisationPrompts
+import com.oli.projectsai.core.inference.THINK_BUDGET_CHARS
 import com.oli.projectsai.core.ui.common.copyToClipboard
 import com.oli.projectsai.core.ui.common.shareText
 import com.oli.projectsai.core.ui.components.TokenBreakdown
@@ -175,6 +176,15 @@ class ChatViewModel @Inject constructor(
      * always show their tail expanded regardless — see ThinkAwareMarkdown in ChatScreen.
      */
     val showReasoningByDefault: StateFlow<Boolean> = assistantSettings.showReasoningByDefault
+        .stateIn(viewModelScope, SharingStarted.Eagerly, false)
+
+    /**
+     * When off (the default), the runaway-thinking abort is disabled and the model may deliberate
+     * for as long as it needs. Read synchronously in [startGeneration]; defaulting to false here
+     * matches the persisted default so a generation kicked off before the flow warms up doesn't
+     * spuriously enforce a limit the user has turned off.
+     */
+    private val limitThinkingTime: StateFlow<Boolean> = assistantSettings.limitThinkingTime
         .stateIn(viewModelScope, SharingStarted.Eagerly, false)
 
     // These MUST be declared before `init`. The init block collects `repoSelectionStore.staged`,
@@ -502,6 +512,8 @@ class ChatViewModel @Inject constructor(
             // Forwarded as Ollama's num_ctx for remote calls. Without it the 26B silently
             // ran at the 2048 default regardless of the project's contextLength setting.
             numCtx = contextWindowTokens,
+            // 0 disables the runaway-thinking abort when the user has turned the limit off.
+            thinkBudgetChars = if (limitThinkingTime.value) THINK_BUDGET_CHARS else 0,
         )
         val started = generationController.start(params)
         if (started) {

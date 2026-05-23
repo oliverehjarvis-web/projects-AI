@@ -46,6 +46,9 @@ internal class ThinkBudgetTracker(private val maxChars: Int = THINK_BUDGET_CHARS
 
     /** Returns true once cumulative thinking content has exceeded the budget. */
     fun observe(token: String): Boolean {
+        // A non-positive budget means "no limit" — the user has opted to let the model think for
+        // as long as it needs (Assistant settings → Limit thinking time, off). Skip all tracking.
+        if (maxChars <= 0) return false
         for (ch in token) {
             tail.append(ch)
             if (!inThink) {
