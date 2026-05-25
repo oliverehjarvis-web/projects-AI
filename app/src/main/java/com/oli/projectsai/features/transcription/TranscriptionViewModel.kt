@@ -9,6 +9,7 @@ import com.oli.projectsai.core.inference.InferenceManager
 import com.oli.projectsai.core.inference.ModelInfo
 import com.oli.projectsai.core.inference.ModelPrecision
 import com.oli.projectsai.core.inference.TRANSCRIPTION_MAX_SECONDS
+import com.oli.projectsai.core.repository.TranscriptionRepository
 import com.oli.projectsai.core.ui.common.copyToClipboard
 import com.oli.projectsai.core.ui.common.shareText
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -28,7 +29,8 @@ class TranscriptionViewModel @Inject constructor(
     @ApplicationContext private val context: Context,
     private val inferenceManager: InferenceManager,
     private val audioCapture: AudioCapture,
-    private val voiceSettings: VoiceSettings
+    private val voiceSettings: VoiceSettings,
+    private val transcriptionRepository: TranscriptionRepository
 ) : ViewModel() {
 
     sealed class RecordingState {
@@ -36,7 +38,8 @@ class TranscriptionViewModel @Inject constructor(
         data object PreparingModel : RecordingState()
         data class Recording(val elapsedMs: Long) : RecordingState()
         data object Transcribing : RecordingState()
-        data class Done(val text: String) : RecordingState()
+        /** [savedId] is the history row this transcript was auto-saved to, for the discard action. */
+        data class Done(val text: String, val savedId: Long? = null) : RecordingState()
         data class Error(val message: String, val needsModel: Boolean = false) : RecordingState()
     }
 
@@ -114,7 +117,9 @@ class TranscriptionViewModel @Inject constructor(
                 _state.value = if (text.isBlank()) {
                     RecordingState.Error("Transcription was empty — try speaking closer to the mic.")
                 } else {
-                    RecordingState.Done(text)
+                    // Auto-save to history; the AI title is generated in the background by the repo.
+                    val savedId = transcriptionRepository.saveShortForm(text)
+                    RecordingState.Done(text, savedId = savedId)
                 }
             } catch (t: Throwable) {
                 _state.value = RecordingState.Error(t.message ?: "Transcription failed")
@@ -127,6 +132,12 @@ class TranscriptionViewModel @Inject constructor(
         tickJob = null
         audioCapture.cancel()
         _state.value = RecordingState.Idle
+    }
+
+    /** Removes the auto-saved history entry for a throwaway recording, then returns to idle. */
+    fun discard(savedId: Long) {
+        viewModelScope.launch { transcriptionRepository.delete(savedId) }
+        reset()
     }
 
     fun copyToClipboard(text: String) = context.copyToClipboard(text, label = "Transcript")

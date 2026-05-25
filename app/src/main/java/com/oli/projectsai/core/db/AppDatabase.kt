@@ -15,9 +15,10 @@ import com.oli.projectsai.core.db.entity.*
         Chat::class,
         Message::class,
         QuickAction::class,
-        LinkedInSuggestion::class
+        LinkedInSuggestion::class,
+        Transcription::class
     ],
-    version = 7,
+    version = 8,
     exportSchema = true
 )
 @TypeConverters(Converters::class)
@@ -27,6 +28,7 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun messageDao(): MessageDao
     abstract fun quickActionDao(): QuickActionDao
     abstract fun linkedInSuggestionDao(): LinkedInSuggestionDao
+    abstract fun transcriptionDao(): TranscriptionDao
 
     companion object {
         val MIGRATION_1_2 = object : Migration(1, 2) {
@@ -101,6 +103,33 @@ abstract class AppDatabase : RoomDatabase() {
                 )
                 db.execSQL(
                     "CREATE UNIQUE INDEX IF NOT EXISTS index_linkedin_suggestions_urn ON linkedin_suggestions(urn)"
+                )
+            }
+        }
+
+        val MIGRATION_7_8 = object : Migration(7, 8) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS transcriptions (
+                        id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+                        text TEXT NOT NULL,
+                        title TEXT NOT NULL,
+                        summary TEXT,
+                        projectId INTEGER,
+                        source TEXT NOT NULL,
+                        audioFileName TEXT,
+                        createdAt INTEGER NOT NULL,
+                        updatedAt INTEGER NOT NULL,
+                        deletedAt INTEGER
+                    )
+                    """.trimIndent()
+                )
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS index_transcriptions_createdAt ON transcriptions(createdAt)"
+                )
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS index_transcriptions_projectId ON transcriptions(projectId)"
                 )
             }
         }

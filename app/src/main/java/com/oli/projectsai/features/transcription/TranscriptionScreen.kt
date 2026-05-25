@@ -27,6 +27,7 @@ fun TranscriptionScreen(
     onNavigateBack: () -> Unit,
     onNavigateToModelManagement: () -> Unit,
     onNavigateToLongForm: () -> Unit,
+    onNavigateToHistory: () -> Unit,
     viewModel: TranscriptionViewModel = hiltViewModel()
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
@@ -55,6 +56,9 @@ fun TranscriptionScreen(
                         state is TranscriptionViewModel.RecordingState.Done ||
                         state is TranscriptionViewModel.RecordingState.Error
                     if (canOpenLongForm) {
+                        IconButton(onClick = onNavigateToHistory) {
+                            Icon(Icons.Default.History, "Transcription history")
+                        }
                         IconButton(onClick = onNavigateToLongForm) {
                             Icon(Icons.Default.UploadFile, "Long-form transcribe")
                         }
@@ -143,6 +147,20 @@ fun TranscriptionScreen(
                             Spacer(Modifier.width(4.dp))
                             Text("Share")
                         }
+                        if (s.savedId != null) {
+                            OutlinedButton(onClick = { viewModel.discard(s.savedId) }) {
+                                Icon(Icons.Default.Delete, null, modifier = Modifier.size(18.dp))
+                                Spacer(Modifier.width(4.dp))
+                                Text("Discard")
+                            }
+                        }
+                    }
+                    if (s.savedId != null) {
+                        Text(
+                            "Saved to history — open it any time from the history icon above.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
                     }
                 }
 

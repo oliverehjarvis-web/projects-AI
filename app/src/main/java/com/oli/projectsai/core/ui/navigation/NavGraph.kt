@@ -21,6 +21,8 @@ import com.oli.projectsai.features.settings.ModelManagementScreen
 import com.oli.projectsai.features.settings.SettingsScreen
 import com.oli.projectsai.features.repo.RepoBrowserScreen
 import com.oli.projectsai.features.transcription.LongFormTranscriptionScreen
+import com.oli.projectsai.features.transcription.TranscriptionDetailScreen
+import com.oli.projectsai.features.transcription.TranscriptionHistoryScreen
 import com.oli.projectsai.features.transcription.TranscriptionScreen
 
 object Routes {
@@ -35,6 +37,8 @@ object Routes {
     const val GLOBAL_CONTEXT = "settings/global-context"
     const val TRANSCRIPTION = "transcription"
     const val LONG_TRANSCRIPTION = "transcription/long"
+    const val TRANSCRIPTION_HISTORY = "transcription/history"
+    const val TRANSCRIPTION_DETAIL = "transcription/history/{transcriptionId}"
     const val REPO_BROWSER = "repo/browse"
     const val LINKEDIN = "linkedin"
     const val PRIVATE_GATE = "private/gate"
@@ -49,6 +53,7 @@ object Routes {
     fun newChat(projectId: Long, quickActionId: Long? = null) =
         "chat/new/$projectId?quickActionId=${quickActionId ?: -1}"
     fun memory(projectId: Long) = "memory/$projectId"
+    fun transcriptionDetail(id: Long) = "transcription/history/$id"
 }
 
 @Composable
@@ -212,7 +217,24 @@ fun ProjectsAINavGraph(navController: NavHostController) {
             TranscriptionScreen(
                 onNavigateBack = { navController.popBackStack() },
                 onNavigateToModelManagement = { navController.navigate(Routes.MODEL_MANAGEMENT) },
-                onNavigateToLongForm = { navController.navigate(Routes.LONG_TRANSCRIPTION) }
+                onNavigateToLongForm = { navController.navigate(Routes.LONG_TRANSCRIPTION) },
+                onNavigateToHistory = { navController.navigate(Routes.TRANSCRIPTION_HISTORY) }
+            )
+        }
+
+        composable(Routes.TRANSCRIPTION_HISTORY) {
+            TranscriptionHistoryScreen(
+                onNavigateBack = { navController.popBackStack() },
+                onOpen = { id -> navController.navigate(Routes.transcriptionDetail(id)) }
+            )
+        }
+
+        composable(
+            Routes.TRANSCRIPTION_DETAIL,
+            arguments = listOf(navArgument("transcriptionId") { type = NavType.LongType })
+        ) {
+            TranscriptionDetailScreen(
+                onNavigateBack = { navController.popBackStack() }
             )
         }
 

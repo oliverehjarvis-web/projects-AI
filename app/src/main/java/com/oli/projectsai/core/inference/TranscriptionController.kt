@@ -2,15 +2,18 @@ package com.oli.projectsai.core.inference
 
 import android.net.Uri
 import com.oli.projectsai.core.preferences.VoiceSettings
+import com.oli.projectsai.core.repository.TranscriptionRepository
 import com.oli.projectsai.di.ApplicationScope
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.io.File
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -27,7 +30,12 @@ sealed class LongTranscriptionState {
         val identifySpeakers: Boolean
     ) : LongTranscriptionState()
     data class Reconciling(val fileName: String, val partialTranscript: String) : LongTranscriptionState()
-    data class Done(val transcript: String, val cancelled: Boolean = false) : LongTranscriptionState()
+    data class Done(
+        val transcript: String,
+        val cancelled: Boolean = false,
+        /** History row this transcript was auto-saved to; null when there was nothing to save. */
+        val savedId: Long? = null
+    ) : LongTranscriptionState()
     data class Error(val message: String, val needsModel: Boolean = false) : LongTranscriptionState()
 }
 
@@ -51,6 +59,7 @@ class TranscriptionController @Inject constructor(
     private val inferenceManager: InferenceManager,
     private val audioDecoder: AudioDecoder,
     private val voiceSettings: VoiceSettings,
+    private val transcriptionRepository: TranscriptionRepository,
     @ApplicationScope private val scope: CoroutineScope,
 ) {
 
@@ -154,7 +163,12 @@ class TranscriptionController @Inject constructor(
                 )
             }
         } catch (ce: CancellationException) {
-            _state.value = LongTranscriptionState.Done(partial.toString().trim(), cancelled = true)
+            val transcript = partial.toString().trim()
+            _state.value = LongTranscriptionState.Done(
+                transcript = transcript,
+                cancelled = true,
+                savedId = persist(transcript, fileName)
+            )
             return
         }
 
@@ -178,17 +192,36 @@ class TranscriptionController @Inject constructor(
                     reconciled = out.toString().trim()
                     break
                 } catch (ce: CancellationException) {
-                    _state.value = LongTranscriptionState.Done(partial.toString().trim(), cancelled = true)
+                    val transcript = partial.toString().trim()
+                    _state.value = LongTranscriptionState.Done(
+                        transcript = transcript,
+                        cancelled = true,
+                        savedId = persist(transcript, fileName)
+                    )
                     return
                 } catch (_: Throwable) {
                     // Try the next candidate; fall back to raw transcript below if none work.
                 }
             }
-            _state.value = LongTranscriptionState.Done(reconciled ?: partial.toString().trim())
+            val transcript = reconciled ?: partial.toString().trim()
+            _state.value = LongTranscriptionState.Done(transcript, savedId = persist(transcript, fileName))
             return
         }
 
-        _state.value = LongTranscriptionState.Done(partial.toString().trim())
+        val transcript = partial.toString().trim()
+        _state.value = LongTranscriptionState.Done(transcript, savedId = persist(transcript, fileName))
+    }
+
+    /**
+     * Auto-saves a finished (or cancelled-but-partial) transcript to history. Wrapped in
+     * [NonCancellable] so the cancel path still persists the partial after the job's own coroutine
+     * has been cancelled. Returns null — and saves nothing — for an empty transcript.
+     */
+    private suspend fun persist(transcript: String, fileName: String): Long? {
+        if (transcript.isBlank()) return null
+        return withContext(NonCancellable) {
+            transcriptionRepository.saveLongForm(transcript, fileName)
+        }
     }
 
     /**

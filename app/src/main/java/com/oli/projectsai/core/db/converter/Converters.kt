@@ -6,6 +6,7 @@ import com.oli.projectsai.core.db.entity.MessageRole
 import com.oli.projectsai.core.db.entity.PreferredBackend
 import com.oli.projectsai.core.db.entity.SuggestedAction
 import com.oli.projectsai.core.db.entity.SuggestionStatus
+import com.oli.projectsai.core.db.entity.TranscriptionSource
 
 class Converters {
     @TypeConverter
@@ -57,6 +58,17 @@ class Converters {
     } catch (t: IllegalArgumentException) {
         Log.w(TAG, "Unknown SuggestionStatus '$value', falling back to PENDING")
         SuggestionStatus.PENDING
+    }
+
+    @TypeConverter
+    fun fromTranscriptionSource(value: TranscriptionSource): String = value.name
+
+    @TypeConverter
+    fun toTranscriptionSource(value: String): TranscriptionSource = try {
+        TranscriptionSource.valueOf(value)
+    } catch (t: IllegalArgumentException) {
+        Log.w(TAG, "Unknown TranscriptionSource '$value', falling back to SHORT_FORM")
+        TranscriptionSource.SHORT_FORM
     }
 
     private companion object {

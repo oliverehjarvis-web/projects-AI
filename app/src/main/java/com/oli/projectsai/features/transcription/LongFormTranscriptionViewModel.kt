@@ -16,6 +16,7 @@ import com.oli.projectsai.core.inference.TranscriptionController
 import com.oli.projectsai.core.inference.TranscriptionForegroundService
 import com.oli.projectsai.core.repository.ChatRepository
 import com.oli.projectsai.core.repository.ProjectRepository
+import com.oli.projectsai.core.repository.TranscriptionRepository
 import com.oli.projectsai.core.ui.common.copyToClipboard
 import com.oli.projectsai.core.ui.common.shareText
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -33,6 +34,7 @@ class LongFormTranscriptionViewModel @Inject constructor(
     private val inferenceManager: InferenceManager,
     private val chatRepository: ChatRepository,
     private val projectRepository: ProjectRepository,
+    private val transcriptionRepository: TranscriptionRepository,
 ) : ViewModel() {
 
     val state: StateFlow<LongTranscriptionState> = controller.state
@@ -54,7 +56,7 @@ class LongFormTranscriptionViewModel @Inject constructor(
 
     fun reset() = controller.reset()
 
-    fun sendToChat(projectId: Long, transcript: String, onReady: (Long) -> Unit) {
+    fun sendToChat(projectId: Long, transcript: String, savedId: Long?, onReady: (Long) -> Unit) {
         viewModelScope.launch {
             val title = "Transcript: ${java.time.LocalDate.now()}"
             val chatId = chatRepository.createChat(Chat(projectId = projectId, title = title))
@@ -66,6 +68,8 @@ class LongFormTranscriptionViewModel @Inject constructor(
                     tokenCount = inferenceManager.countTokens(transcript)
                 )
             )
+            // Tag the auto-saved history entry with the project it was sent to.
+            savedId?.let { transcriptionRepository.tagProject(it, projectId) }
             onReady(chatId)
         }
     }

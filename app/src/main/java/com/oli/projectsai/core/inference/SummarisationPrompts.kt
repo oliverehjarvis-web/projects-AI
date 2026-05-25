@@ -128,6 +128,43 @@ object SummarisationPrompts {
         return system to user
     }
 
+    /**
+     * A short, file-name-like title for a saved voice transcription. Kept to a single line so it
+     * can drop straight into the history list without post-processing — the repository still
+     * trims/clamps defensively in case a model ignores the instruction.
+     */
+    fun buildTranscriptTitlePrompt(transcript: String): Pair<String, String> {
+        val system = """
+            You write a short title for a voice transcript so the user can recognise it later in a list.
+
+            Rules:
+            - 3 to 7 words. No trailing punctuation. No quotes. No markdown.
+            - Capture the subject, not the act of recording ("Dentist appointment Tuesday", not
+              "A recording about a dentist appointment").
+            - Preserve names, numbers, and dates that appear.
+            - Output the title only — nothing else.
+        """.trimIndent()
+        val user = "Title this transcript:\n\n$transcript"
+        return system to user
+    }
+
+    /**
+     * A compact summary of a transcript, surfaced under the full text on the history detail screen.
+     */
+    fun buildTranscriptSummaryPrompt(transcript: String): Pair<String, String> {
+        val system = """
+            You summarise a voice transcript so the user can grasp it without re-reading the whole thing.
+
+            Rules:
+            - Lead with a one-sentence gist, then 2-5 short bullets prefixed with "- ".
+            - Pull out any action items, decisions, dates, names, and numbers — preserved verbatim.
+            - Skip filler and false starts inherent to spoken audio.
+            - No preamble, no closing remarks, no markdown headers.
+        """.trimIndent()
+        val user = "Summarise this transcript:\n\n$transcript"
+        return system to user
+    }
+
     fun buildCompressPrompt(existingMemory: String, pinned: List<String>): Pair<String, String> {
         val pinnedBlock = if (pinned.isEmpty()) "" else
             "\n\nPinned lines (must appear in the output verbatim):\n" +

@@ -71,7 +71,7 @@ fun LongFormTranscriptionScreen(
     val projects by viewModel.projects.collectAsState()
     val context = LocalContext.current
     var identifySpeakers by remember { mutableStateOf(false) }
-    var showProjectPicker by remember { mutableStateOf<String?>(null) }
+    var showProjectPicker by remember { mutableStateOf<LongTranscriptionState.Done?>(null) }
 
     val pickerLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocument()
@@ -158,7 +158,7 @@ fun LongFormTranscriptionScreen(
                     cancelled = s.cancelled,
                     onCopy = { viewModel.copyToClipboard(s.transcript) },
                     onShare = { viewModel.shareText(s.transcript) },
-                    onSendToChat = { showProjectPicker = s.transcript },
+                    onSendToChat = { showProjectPicker = s },
                     onStartOver = { viewModel.reset() }
                 )
 
@@ -182,8 +182,8 @@ fun LongFormTranscriptionScreen(
         }
     }
 
-    val pendingTranscript = showProjectPicker
-    if (pendingTranscript != null) {
+    val pending = showProjectPicker
+    if (pending != null) {
         AlertDialog(
             onDismissRequest = { showProjectPicker = null },
             title = { Text("Send transcript to project") },
@@ -204,9 +204,11 @@ fun LongFormTranscriptionScreen(
                             TextButton(
                                 onClick = {
                                     showProjectPicker = null
-                                    viewModel.sendToChat(project.id, pendingTranscript) { chatId ->
-                                        onNavigateToChat(chatId)
-                                    }
+                                    viewModel.sendToChat(
+                                        project.id,
+                                        pending.transcript,
+                                        pending.savedId
+                                    ) { chatId -> onNavigateToChat(chatId) }
                                 },
                                 modifier = Modifier.fillMaxWidth()
                             ) {
